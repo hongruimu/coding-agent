@@ -1,0 +1,11 @@
+pyproject.toml
+agent/__init__.py
+cli/__init__.py
+coding_agent.egg-info/PKG-INFO
+coding_agent.egg-info/SOURCES.txt
+coding_agent.egg-info/dependency_links.txt
+coding_agent.egg-info/entry_points.txt
+coding_agent.egg-info/requires.txt
+coding_agent.egg-info/top_level.txt
+model/__init__.py
+tools/__init__.py

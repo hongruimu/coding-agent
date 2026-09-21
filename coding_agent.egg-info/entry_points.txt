@@ -1,0 +1,2 @@
+[console_scripts]
+coding-agent = cli.main:main
