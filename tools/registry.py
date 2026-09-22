@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -36,3 +36,6 @@ class ToolRegistry:
     def execute(self, name: str, arguments: dict):
         tool = self.get(name)
         return tool.function(**arguments)
+
+    def names(self) -> list[str]:
+        return sorted(self._tools)
