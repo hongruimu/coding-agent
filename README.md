@@ -30,6 +30,13 @@ You can choose a model with either `--model` or `CODING_AGENT_MODEL`:
 CODING_AGENT_MODEL=gpt-4.1-mini coding-agent "Inspect this repo and suggest the next change"
 ```
 
+You can override the API endpoint with either `--base-url` or `OPENAI_BASE_URL`:
+
+```bash
+OPENAI_BASE_URL=https://api.example.com/v1 coding-agent "Inspect this repo"
+coding-agent --base-url https://api.example.com/v1 "Inspect this repo"
+```
+
 ## Next milestones
 
 - Add patch-based editing instead of whole-file writes.

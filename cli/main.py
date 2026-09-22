@@ -6,7 +6,6 @@ from pathlib import Path
 from agent.core import CodingAgent
 from model.openai_chat import OpenAIChatClient
 from tools import create_registry
-import agent
 
 
 DEFAULT_MODEL = "gpt-4.1-mini"
@@ -17,6 +16,7 @@ def main() -> int:
     parser.add_argument("prompt", nargs="*", help="Task for the agent. Reads stdin when omitted.")
     parser.add_argument("--cwd", default=".", help="Workspace directory to operate in.")
     parser.add_argument("--model", default=os.getenv("CODING_AGENT_MODEL", DEFAULT_MODEL))
+    parser.add_argument("--base-url", default=os.getenv("OPENAI_BASE_URL"), help="Override the OpenAI API base URL.")
     parser.add_argument("--max-steps", type=int, default=12)
     args = parser.parse_args()
 
@@ -39,7 +39,7 @@ def main() -> int:
 
     try:
         agent = CodingAgent(
-            client=OpenAIChatClient(),
+            client=OpenAIChatClient(base_url=args.base_url),
             registry=create_registry(),
             model=args.model,
             max_steps=args.max_steps,
