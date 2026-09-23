@@ -95,6 +95,13 @@ class CodingAgent:
             messages=messages,
             tools=self.registry.definitions(),
         )
+        print("=======>END RUN=======>")
+        print(messages)
+        print("=======>END RUN=======>")
+        
+        print("=======>END RESPONSE=======>")
+        print(response)
+        print("=======>END RESPONSE=======>")
         return AgentResult(answer=response.choices[0].message.content or final_answer, steps_used=self.max_steps)
 
     def _assistant_message(self, message: Any) -> dict[str, Any]:

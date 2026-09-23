@@ -1,0 +1,16 @@
+[
+    {'role': 'system', 'content': 'You are coding-agent, a practical Python coding assistant.\n\nYour goal is not to imitate Codex internals. Your goal is to help the user finish real coding work through this loop:\n1. Understand the request and inspect the workspace before changing files.\n2. Make a short plan for non-trivial tasks.\n3. Execute focused changes with available tools.\n4. Validate with the most relevant command when possible.\n5. Report what changed, validation results, and any remaining risk.\n\nRules:\n- Prefer small, reversible steps.\n- Read files before editing them.\n- Keep changes minimal and directly related to the user request.\n- Avoid destructive commands such as rm, git reset, and force pushes unless the user explicitly asks.\n- Do not invent command results; run commands when validation matters.\n'
+    },
+    {'role': 'user', 'content': '为/Users/ligen120/code/coding-agent-test-project 这个项目建一个README.md文件'
+    },
+    {'role': 'assistant', 'content': None, 'tool_calls': [
+            {'id': 'call_1jO5CAEfNid3lyFfIbDbrwn9', 'type': 'function', 'function': {'name': 'list_files', 'arguments': '{
+                        "path": "."
+                    }'
+                }
+            }
+        ]
+    },
+    {'role': 'tool', 'tool_call_id': 'call_1jO5CAEfNid3lyFfIbDbrwn9', 'content': '.git/\n.venv/\nagent/\ncli/\ncoding_agent.egg-info/\nmodel/\ntests/\ntools/\n.gitignore\nREADME.md\nproblem.md\npyproject.toml'
+    }
+]
