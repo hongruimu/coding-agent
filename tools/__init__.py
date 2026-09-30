@@ -1,9 +1,12 @@
+from functools import partial
+from pathlib import Path
+
 from tools.filesystem import list_files, read_file, write_file
 from tools.registry import Tool, ToolRegistry
 from tools.shell import run_command
 
 
-def create_registry() -> ToolRegistry:
+def create_registry(workspace: str | Path = ".") -> ToolRegistry:
     registry = ToolRegistry()
 
     registry.register(
@@ -20,7 +23,7 @@ def create_registry() -> ToolRegistry:
                     }
                 },
             },
-            function=list_files,
+            function=partial(list_files, workspace=workspace),
         )
     )
 
@@ -38,7 +41,7 @@ def create_registry() -> ToolRegistry:
                 },
                 "required": ["path"],
             },
-            function=read_file,
+            function=partial(read_file, workspace=workspace),
         )
     )
 
@@ -60,7 +63,7 @@ def create_registry() -> ToolRegistry:
                 },
                 "required": ["path", "content"],
             },
-            function=write_file,
+            function=partial(write_file, workspace=workspace),
         )
     )
 
@@ -83,7 +86,7 @@ def create_registry() -> ToolRegistry:
                 },
                 "required": ["command"],
             },
-            function=run_command,
+            function=partial(run_command, workspace=workspace),
         )
     )
 

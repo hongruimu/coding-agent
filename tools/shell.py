@@ -5,20 +5,34 @@ from pathlib import Path
 MAX_OUTPUT_CHARS = 20_000
 
 
-def run_command(command: str, timeout: int = 30) -> str:
+def _workspace_root(workspace: str | Path) -> Path:
+    root = Path(workspace).expanduser().resolve()
+    if not root.exists():
+        raise ValueError(f"Workspace does not exist: {root}")
+
+    if not root.is_dir():
+        raise ValueError(f"Workspace is not a directory: {root}")
+
+    return root
+
+
+def run_command(command: str, timeout: int = 30, *, workspace: str | Path = ".") -> str:
     if timeout < 1 or timeout > 120:
         return "Timeout must be between 1 and 120 seconds."
+
+    root = _workspace_root(workspace)
 
     result = subprocess.run(
         command,
         shell=True,
-        cwd=Path.cwd(),
+        cwd=root,
         text=True,
         capture_output=True,
         timeout=timeout,
     )
 
     output = []
+    output.append(f"workspace: {root}")
     output.append(f"exit_code={result.returncode}")
 
     if result.stdout:

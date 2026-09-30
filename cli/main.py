@@ -1,9 +1,9 @@
 import argparse
 import os
 import sys
-from pathlib import Path
 
 from agent.core import CodingAgent
+from agent.workspace import WorkspaceResolutionError, resolve_workspace
 from model.openai_chat import OpenAIChatClient
 from tools import create_registry
 
@@ -27,11 +27,10 @@ def main() -> int:
     if not prompt:
         parser.error("provide a prompt argument or pipe a prompt through stdin")
 
-    workspace = Path(args.cwd).resolve()
-    if not workspace.exists() or not workspace.is_dir():
-        parser.error(f"workspace does not exist or is not a directory: {args.cwd}")
-
-    os.chdir(workspace)
+    try:
+        workspace = resolve_workspace(args.cwd, prompt)
+    except WorkspaceResolutionError as exc:
+        parser.error(str(exc))
 
     if not os.getenv("OPENAI_API_KEY"):
         print("OPENAI_API_KEY is not set. Export it before running coding-agent.", file=sys.stderr)
@@ -40,8 +39,9 @@ def main() -> int:
     try:
         agent = CodingAgent(
             client=OpenAIChatClient(base_url=args.base_url),
-            registry=create_registry(),
+            registry=create_registry(workspace.root),
             model=args.model,
+            workspace=workspace.root,
             max_steps=args.max_steps,
         )
         result = agent.run(prompt)

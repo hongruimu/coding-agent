@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from tools.registry import ToolRegistry
@@ -35,15 +36,31 @@ class ChatClient(Protocol):
 
 
 class CodingAgent:
-    def __init__(self, client: ChatClient, registry: ToolRegistry, model: str, max_steps: int = 12):
+    def __init__(
+        self,
+        client: ChatClient,
+        registry: ToolRegistry,
+        model: str,
+        workspace: str | Path,
+        max_steps: int = 12,
+    ):
         self.client = client
         self.registry = registry
         self.model = model
+        self.workspace = Path(workspace).expanduser().resolve()
         self.max_steps = max_steps
 
     def run(self, user_prompt: str) -> AgentResult:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": (
+                    f"Current workspace: {self.workspace}\n"
+                    "All tool paths are resolved relative to this workspace. "
+                    "Do not assume paths in the user's prompt are active workspaces unless the CLI selected them."
+                ),
+            },
             {"role": "user", "content": user_prompt},
         ]
 

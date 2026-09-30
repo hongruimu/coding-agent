@@ -72,6 +72,8 @@ coding-agent "Inspect this repo and summarize the project"
 coding-agent --cwd /path/to/project "Add a usage section to README"
 ```
 
+`--cwd` 是 Agent 操作项目的权威工作区。如果用户提示词中包含的绝对路径不在当前工作区内，CLI 会停止执行并提示使用正确的 `--cwd`，避免误操作到错误目录。
+
 指定模型：
 
 ```bash

@@ -5,13 +5,21 @@ MAX_FILE_CHARS = 20_000
 MAX_LIST_ENTRIES = 200
 
 
-def _workspace_root() -> Path:
-    return Path.cwd().resolve()
+def _workspace_root(workspace: str | Path) -> Path:
+    root = Path(workspace).expanduser().resolve()
+    if not root.exists():
+        raise ValueError(f"Workspace does not exist: {root}")
+
+    if not root.is_dir():
+        raise ValueError(f"Workspace is not a directory: {root}")
+
+    return root
 
 
-def _safe_path(path: str) -> Path:
-    root = _workspace_root()
-    file_path = (root / path).resolve()
+def _safe_path(path: str, workspace: str | Path) -> Path:
+    root = _workspace_root(workspace)
+    requested_path = Path(path).expanduser()
+    file_path = requested_path.resolve() if requested_path.is_absolute() else (root / requested_path).resolve()
 
     try:
         file_path.relative_to(root)
@@ -21,49 +29,54 @@ def _safe_path(path: str) -> Path:
     return file_path
 
 
-def _display_path(path: Path) -> str:
-    return str(path.relative_to(_workspace_root()))
+def _display_path(path: Path, workspace: str | Path) -> str:
+    return str(path.relative_to(_workspace_root(workspace)))
 
 
-def list_files(path: str = ".") -> str:
-    directory = _safe_path(path)
+def _header(workspace: str | Path) -> str:
+    return f"workspace: {_workspace_root(workspace)}"
+
+
+def list_files(path: str = ".", *, workspace: str | Path = ".") -> str:
+    directory = _safe_path(path, workspace)
 
     if not directory.exists():
-        return f"Directory not found: {path}"
+        return f"{_header(workspace)}\nDirectory not found: {path}"
 
     if not directory.is_dir():
-        return f"Not a directory: {path}"
+        return f"{_header(workspace)}\nNot a directory: {path}"
 
     entries: list[str] = []
     for child in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name)):
         suffix = "/" if child.is_dir() else ""
-        entries.append(f"{_display_path(child)}{suffix}")
+        entries.append(f"{_display_path(child, workspace)}{suffix}")
 
         if len(entries) >= MAX_LIST_ENTRIES:
             entries.append(f"... truncated after {MAX_LIST_ENTRIES} entries")
             break
 
-    return "\n".join(entries) if entries else "Directory is empty."
+    body = "\n".join(entries) if entries else "Directory is empty."
+    return f"{_header(workspace)}\n{body}"
 
 
-def read_file(path: str) -> str:
-    file_path = _safe_path(path)
+def read_file(path: str, *, workspace: str | Path = ".") -> str:
+    file_path = _safe_path(path, workspace)
 
     if not file_path.exists():
-        return f"File not found: {path}"
+        return f"{_header(workspace)}\nFile not found: {path}"
 
     if not file_path.is_file():
-        return f"Not a file: {path}"
+        return f"{_header(workspace)}\nNot a file: {path}"
 
     content = file_path.read_text(errors="replace")
     if len(content) > MAX_FILE_CHARS:
-        return content[:MAX_FILE_CHARS] + f"\n... truncated after {MAX_FILE_CHARS} characters"
+        content = content[:MAX_FILE_CHARS] + f"\n... truncated after {MAX_FILE_CHARS} characters"
 
-    return content
+    return f"{_header(workspace)}\npath: {_display_path(file_path, workspace)}\n--- content ---\n{content}"
 
 
-def write_file(path: str, content: str) -> str:
-    file_path = _safe_path(path)
+def write_file(path: str, content: str, *, workspace: str | Path = ".") -> str:
+    file_path = _safe_path(path, workspace)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(content)
-    return f"Wrote {len(content)} characters to {_display_path(file_path)}"
+    return f"{_header(workspace)}\nWrote {len(content)} characters to {_display_path(file_path, workspace)}"
