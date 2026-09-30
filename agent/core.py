@@ -63,9 +63,6 @@ class CodingAgent:
                 final_answer = message.content
 
             if not tool_calls:
-                print(f"======={step}=======")
-                print(messages)
-                print(f">>>>======={step}===")
                 return AgentResult(answer=final_answer, steps_used=step)
 
             for tool_call in tool_calls:
@@ -77,9 +74,6 @@ class CodingAgent:
                         "content": result,
                     }
                 )
-            print(f"=======ENDFOR=======")
-            print(messages)
-            print(f">>>>=======ENDFOR===")
 
         messages.append(
             {
@@ -87,21 +81,11 @@ class CodingAgent:
                 "content": "You reached the step limit. Summarize progress, files changed, validation, and next action.",
             }
         )
-        print("=======>END=======>")
-        print(messages)
-        print("=======>END=======>")
         response = self.client.create(
             model=self.model,
             messages=messages,
             tools=self.registry.definitions(),
         )
-        print("=======>END RUN=======>")
-        print(messages)
-        print("=======>END RUN=======>")
-        
-        print("=======>END RESPONSE=======>")
-        print(response)
-        print("=======>END RESPONSE=======>")
         return AgentResult(answer=response.choices[0].message.content or final_answer, steps_used=self.max_steps)
 
     def _assistant_message(self, message: Any) -> dict[str, Any]:
