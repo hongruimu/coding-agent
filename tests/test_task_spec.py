@@ -37,7 +37,16 @@ class TaskSpecTests(unittest.TestCase):
             self.assertTrue(spec.write_allowed)
             self.assertFalse(spec.shell_allowed)
             self.assertEqual(
-                ["grep_code", "list_files", "read_file", "repo_map", "search_files", "write_file"],
+                [
+                    "git_diff",
+                    "grep_code",
+                    "list_files",
+                    "read_file",
+                    "replace_text",
+                    "repo_map",
+                    "search_files",
+                    "write_file",
+                ],
                 sorted(spec.allowed_tools()),
             )
 

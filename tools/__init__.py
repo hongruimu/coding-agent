@@ -1,7 +1,8 @@
 from functools import partial
 from pathlib import Path
 
-from tools.filesystem import list_files, read_file, write_file
+from tools.filesystem import list_files, read_file, replace_text, write_file
+from tools.git import git_diff
 from tools.repo import repo_map
 from tools.registry import Tool, ToolRegistry
 from tools.search import grep_code, search_files
@@ -149,7 +150,7 @@ def create_registry(
     register(
         Tool(
             name="write_file",
-            description="Write complete text content to a file inside the workspace.",
+            description="Create a new text file inside the workspace. Fails if the file already exists.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -165,6 +166,52 @@ def create_registry(
                 "required": ["path", "content"],
             },
             function=partial(write_file, workspace=workspace, allowed_paths=allowed_write_paths),
+        )
+    )
+
+    register(
+        Tool(
+            name="replace_text",
+            description=(
+                "Modify an existing text file by replacing one unique exact text block. "
+                "Read the file first and provide enough surrounding text to make the match unique."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Existing file path relative to the workspace",
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": "Exact text block currently present exactly once",
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": "Replacement text block",
+                    },
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+            function=partial(replace_text, workspace=workspace, allowed_paths=allowed_write_paths),
+        )
+    )
+
+    register(
+        Tool(
+            name="git_diff",
+            description="Show the current Git diff for the workspace or a specific workspace path.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Optional file or directory path relative to the workspace",
+                    }
+                },
+            },
+            function=partial(git_diff, workspace=workspace),
         )
     )
 

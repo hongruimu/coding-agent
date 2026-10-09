@@ -16,12 +16,15 @@
   - `grep_code`：搜索代码文本并返回文件、行号和匹配片段；
   - `list_files`：列出工作区文件；
   - `read_file`：读取文件内容；
-  - `write_file`：写入文件内容；
+  - `write_file`：创建新文件；
+  - `replace_text`：通过唯一文本块修改已有文件；
+  - `git_diff`：查看工作区或指定文件的 Git diff；
   - `run_command`：在工作区中执行 Shell 命令；
 - 在执行前生成确定性的 `TaskSpec`，识别任务类型、目标文件、验收标准和计划要求；
 - 根据 `TaskSpec` 和项目地图生成 `ContextPlan`，明确必读文件、候选文件和上下文预算；
 - 根据 `TaskSpec` 动态裁剪可用工具，只读任务不暴露写文件和 Shell 工具；
-- 写任务通过允许路径限制 `write_file` 的修改范围；
+- 写任务通过允许路径限制 `write_file` 和 `replace_text` 的修改范围；
+- 每次成功编辑后自动返回对应 diff，并记录本轮 `changed_files`；
 - 对文件路径访问做了工作区边界限制，降低误操作风险。
 
 ## 项目结构

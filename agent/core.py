@@ -21,6 +21,8 @@ Rules:
 - Prefer small, reversible steps.
 - Use repo_map to understand project structure, then search_files or grep_code to locate relevant files before reading them.
 - Read files before editing them.
+- Use write_file only to create new files. Use replace_text for focused edits to existing files.
+- Review the git diff returned after each successful edit before continuing.
 - Keep changes minimal and directly related to the user request.
 - Avoid destructive commands such as rm, git reset, and force pushes unless the user explicitly asks.
 - Do not invent command results; run commands when validation matters.
@@ -31,6 +33,7 @@ Rules:
 class AgentResult:
     answer: str
     steps_used: int
+    changed_files: tuple[str, ...] = ()
 
 
 class ChatClient(Protocol):
@@ -57,9 +60,11 @@ class CodingAgent:
         self.context_plan = context_plan
         self.max_steps = max_steps
         self._read_files: set[str] = set()
+        self._changed_files: list[str] = []
 
     def run(self, user_prompt: str) -> AgentResult:
         self._read_files.clear()
+        self._changed_files.clear()
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -98,7 +103,7 @@ class CodingAgent:
                 final_answer = message.content
 
             if not tool_calls:
-                return AgentResult(answer=final_answer, steps_used=step)
+                return AgentResult(answer=final_answer, steps_used=step, changed_files=tuple(self._changed_files))
 
             for tool_call in tool_calls:
                 result = self._execute_tool(tool_call)
@@ -121,7 +126,11 @@ class CodingAgent:
             messages=messages,
             tools=self.registry.definitions(),
         )
-        return AgentResult(answer=response.choices[0].message.content or final_answer, steps_used=self.max_steps)
+        return AgentResult(
+            answer=response.choices[0].message.content or final_answer,
+            steps_used=self.max_steps,
+            changed_files=tuple(self._changed_files),
+        )
 
     def _assistant_message(self, message: Any) -> dict[str, Any]:
         assistant_message: dict[str, Any] = {
@@ -160,6 +169,11 @@ class CodingAgent:
             result = self.registry.execute(name, arguments)
             if read_path is not None:
                 self._read_files.add(read_path)
+            changed_path = self._changed_path(name, arguments)
+            if changed_path is not None:
+                if changed_path not in self._changed_files:
+                    self._changed_files.append(changed_path)
+                result = self._append_diff(result, changed_path)
         except Exception as exc:
             return f"Tool {name} failed: {type(exc).__name__}: {exc}"
 
@@ -167,6 +181,28 @@ class CodingAgent:
             return result
 
         return json.dumps(result, ensure_ascii=False)
+
+    def _changed_path(self, name: str, arguments: dict[str, Any]) -> str | None:
+        if name not in {"write_file", "replace_text"} or not isinstance(arguments.get("path"), str):
+            return None
+
+        requested = Path(arguments["path"]).expanduser()
+        absolute = requested.resolve() if requested.is_absolute() else (self.workspace / requested).resolve()
+        try:
+            return absolute.relative_to(self.workspace).as_posix()
+        except ValueError:
+            return None
+
+    def _append_diff(self, result: Any, path: str) -> str:
+        text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        if "git_diff" not in self.registry.names():
+            return text
+
+        try:
+            diff = self.registry.execute("git_diff", {"path": path})
+        except Exception as exc:
+            diff = f"git_diff failed: {type(exc).__name__}: {exc}"
+        return f"{text}\n\n{diff}"
 
     def _read_path_for_budget(self, name: str, arguments: dict[str, Any]) -> str | None:
         if name != "read_file" or not isinstance(arguments.get("path"), str):

@@ -90,10 +90,47 @@ def write_file(
     relative_path = _display_path(file_path, workspace)
     if allowed_paths is not None and not _is_write_allowed(relative_path, allowed_paths):
         raise PermissionError(f"Write path is not allowed for this task: {relative_path}")
+    if file_path.exists():
+        raise FileExistsError(f"File already exists; use replace_text to modify it: {relative_path}")
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(content)
-    return f"{_header(workspace)}\nWrote {len(content)} characters to {relative_path}"
+    return f"{_header(workspace)}\nCreated {relative_path} with {len(content)} characters"
+
+
+def replace_text(
+    path: str,
+    old_text: str,
+    new_text: str,
+    *,
+    workspace: str | Path = ".",
+    allowed_paths: tuple[str, ...] | None = None,
+) -> str:
+    if not old_text:
+        raise ValueError("old_text must not be empty")
+    if old_text == new_text:
+        raise ValueError("new_text must differ from old_text")
+
+    file_path = _safe_path(path, workspace)
+    relative_path = _display_path(file_path, workspace)
+    if allowed_paths is not None and not _is_write_allowed(relative_path, allowed_paths):
+        raise PermissionError(f"Write path is not allowed for this task: {relative_path}")
+    if not file_path.exists():
+        raise FileNotFoundError(f"File not found: {relative_path}")
+    if not file_path.is_file():
+        raise IsADirectoryError(f"Not a file: {relative_path}")
+
+    with file_path.open("r", encoding="utf-8", newline="") as stream:
+        content = stream.read()
+    occurrences = content.count(old_text)
+    if occurrences == 0:
+        raise ValueError(f"old_text was not found in {relative_path}; read the file and try again")
+    if occurrences > 1:
+        raise ValueError(f"old_text occurs {occurrences} times in {relative_path}; provide a unique text block")
+
+    with file_path.open("w", encoding="utf-8", newline="") as stream:
+        stream.write(content.replace(old_text, new_text, 1))
+    return f"{_header(workspace)}\nReplaced one text block in {relative_path}"
 
 
 def _is_write_allowed(path: str, allowed_paths: tuple[str, ...]) -> bool:

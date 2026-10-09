@@ -12,7 +12,7 @@ FILE_REFERENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-READ_TOOLS = frozenset({"repo_map", "search_files", "grep_code", "list_files", "read_file"})
+READ_TOOLS = frozenset({"repo_map", "search_files", "grep_code", "list_files", "read_file", "git_diff"})
 
 
 class TaskType(str, Enum):
@@ -38,7 +38,7 @@ class TaskSpec:
     def allowed_tools(self) -> set[str]:
         tools = set(READ_TOOLS)
         if self.write_allowed:
-            tools.add("write_file")
+            tools.update({"write_file", "replace_text"})
         if self.shell_allowed:
             tools.add("run_command")
         return tools

@@ -63,6 +63,8 @@ def main() -> int:
         return 1
 
     print(result.answer)
+    if result.changed_files:
+        print(f"\n[changed_files={', '.join(result.changed_files)}]")
     print(f"\n[steps_used={result.steps_used}]")
     return 0
 
