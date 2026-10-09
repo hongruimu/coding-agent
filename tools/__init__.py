@@ -2,12 +2,34 @@ from functools import partial
 from pathlib import Path
 
 from tools.filesystem import list_files, read_file, write_file
+from tools.repo import repo_map
 from tools.registry import Tool, ToolRegistry
 from tools.shell import run_command
 
 
 def create_registry(workspace: str | Path = ".") -> ToolRegistry:
     registry = ToolRegistry()
+
+    registry.register(
+        Tool(
+            name="repo_map",
+            description=(
+                "Return a filtered project map for the workspace, including project type, manifests, "
+                "docs, source directories, test directories, entry points, and tracked files."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path relative to the workspace",
+                        "default": ".",
+                    }
+                },
+            },
+            function=partial(repo_map, workspace=workspace),
+        )
+    )
 
     registry.register(
         Tool(
