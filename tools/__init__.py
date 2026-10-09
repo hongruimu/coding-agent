@@ -4,6 +4,7 @@ from pathlib import Path
 from tools.filesystem import list_files, read_file, write_file
 from tools.repo import repo_map
 from tools.registry import Tool, ToolRegistry
+from tools.search import grep_code, search_files
 from tools.shell import run_command
 
 
@@ -46,6 +47,71 @@ def create_registry(workspace: str | Path = ".") -> ToolRegistry:
                 },
             },
             function=partial(list_files, workspace=workspace),
+        )
+    )
+
+    registry.register(
+        Tool(
+            name="search_files",
+            description="Search workspace file names and paths without reading file contents.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Case-insensitive substring or glob pattern for file paths",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path relative to the workspace",
+                        "default": ".",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results, from 1 to 200",
+                        "default": 50,
+                    },
+                },
+                "required": ["pattern"],
+            },
+            function=partial(search_files, workspace=workspace),
+        )
+    )
+
+    registry.register(
+        Tool(
+            name="grep_code",
+            description="Search literal text in workspace files and return matching paths, lines, columns, and previews.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Literal text to search for",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path relative to the workspace",
+                        "default": ".",
+                    },
+                    "file_pattern": {
+                        "type": "string",
+                        "description": "Optional glob such as *.py or **/*.ts",
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "Whether matching is case-sensitive",
+                        "default": False,
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results, from 1 to 200",
+                        "default": 50,
+                    },
+                },
+                "required": ["query"],
+            },
+            function=partial(grep_code, workspace=workspace),
         )
     )
 

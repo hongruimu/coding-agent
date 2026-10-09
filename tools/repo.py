@@ -98,7 +98,7 @@ class RepoMap:
             _format_section("test_dirs", self.test_dirs),
             _format_section("entry_points", self.entry_points),
             _format_section("important_files", self.important_files),
-            _format_section("files", self.files),
+            _format_section("files", self.files[:MAX_OUTPUT_FILES]),
         ]
 
         if self.files_truncated:
@@ -146,7 +146,7 @@ def build_repo_map(path: str = ".", *, workspace: str | Path = ".") -> RepoMap:
         test_dirs=test_dirs,
         entry_points=entry_points,
         important_files=important_files,
-        files=files[:MAX_OUTPUT_FILES],
+        files=files,
         files_truncated=len(files) > MAX_OUTPUT_FILES,
         discovery_truncated=discovery.truncated,
     )
