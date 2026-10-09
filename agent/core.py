@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from agent.context_plan import ContextPlan
 from agent.task_spec import TaskSpec
 from tools.registry import ToolRegistry
 
@@ -45,6 +46,7 @@ class CodingAgent:
         model: str,
         workspace: str | Path,
         task_spec: TaskSpec,
+        context_plan: ContextPlan,
         max_steps: int = 12,
     ):
         self.client = client
@@ -52,9 +54,12 @@ class CodingAgent:
         self.model = model
         self.workspace = Path(workspace).expanduser().resolve()
         self.task_spec = task_spec
+        self.context_plan = context_plan
         self.max_steps = max_steps
+        self._read_files: set[str] = set()
 
     def run(self, user_prompt: str) -> AgentResult:
+        self._read_files.clear()
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -66,6 +71,14 @@ class CodingAgent:
                 ),
             },
             {"role": "system", "content": self.task_spec.format_for_prompt()},
+            {
+                "role": "system",
+                "content": (
+                    f"{self.context_plan.format_for_prompt()}\n"
+                    "Read must_read files before making changes. Read maybe_read files only when needed. "
+                    "Do not read forbidden paths, and stay within the context budget."
+                ),
+            },
             {"role": "user", "content": user_prompt},
         ]
 
@@ -135,7 +148,18 @@ class CodingAgent:
         name = tool_call.function.name
         try:
             arguments = json.loads(tool_call.function.arguments or "{}")
+            read_path = self._read_path_for_budget(name, arguments)
+            if read_path is not None and self._is_forbidden_read(read_path):
+                return f"Tool {name} blocked: path is forbidden by the context plan: {read_path}"
+            if read_path is not None and read_path not in self._read_files:
+                if len(self._read_files) >= self.context_plan.max_files:
+                    return (
+                        f"Tool {name} blocked: context file budget of "
+                        f"{self.context_plan.max_files} distinct files has been reached."
+                    )
             result = self.registry.execute(name, arguments)
+            if read_path is not None:
+                self._read_files.add(read_path)
         except Exception as exc:
             return f"Tool {name} failed: {type(exc).__name__}: {exc}"
 
@@ -143,3 +167,24 @@ class CodingAgent:
             return result
 
         return json.dumps(result, ensure_ascii=False)
+
+    def _read_path_for_budget(self, name: str, arguments: dict[str, Any]) -> str | None:
+        if name != "read_file" or not isinstance(arguments.get("path"), str):
+            return None
+
+        requested = Path(arguments["path"]).expanduser()
+        absolute = requested.resolve() if requested.is_absolute() else (self.workspace / requested).resolve()
+        try:
+            return absolute.relative_to(self.workspace).as_posix()
+        except ValueError:
+            return str(absolute)
+
+    def _is_forbidden_read(self, path: str) -> bool:
+        path_parts = Path(path).parts
+        for forbidden in self.context_plan.forbidden:
+            normalized = forbidden.rstrip("/")
+            if forbidden.endswith("/") and normalized in path_parts:
+                return True
+            if not forbidden.endswith("/") and Path(path).name == normalized:
+                return True
+        return False

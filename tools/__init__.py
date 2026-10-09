@@ -12,12 +12,17 @@ def create_registry(
     workspace: str | Path = ".",
     allowed_tools: set[str] | None = None,
     allowed_write_paths: tuple[str, ...] | None = None,
+    max_read_chars: int | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
 
     def register(tool: Tool) -> None:
         if allowed_tools is None or tool.name in allowed_tools:
             registry.register(tool)
+
+    read_file_function = partial(read_file, workspace=workspace)
+    if max_read_chars is not None:
+        read_file_function = partial(read_file, workspace=workspace, max_chars=max_read_chars)
 
     register(
         Tool(
@@ -137,7 +142,7 @@ def create_registry(
                 },
                 "required": ["path"],
             },
-            function=partial(read_file, workspace=workspace),
+            function=read_file_function,
         )
     )
 

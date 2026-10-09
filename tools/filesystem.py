@@ -60,7 +60,10 @@ def list_files(path: str = ".", *, workspace: str | Path = ".") -> str:
     return f"{_header(workspace)}\n{body}"
 
 
-def read_file(path: str, *, workspace: str | Path = ".") -> str:
+def read_file(path: str, *, workspace: str | Path = ".", max_chars: int = MAX_FILE_CHARS) -> str:
+    if max_chars < 1:
+        raise ValueError("max_chars must be greater than zero")
+
     file_path = _safe_path(path, workspace)
 
     if not file_path.exists():
@@ -70,8 +73,8 @@ def read_file(path: str, *, workspace: str | Path = ".") -> str:
         return f"{_header(workspace)}\nNot a file: {path}"
 
     content = file_path.read_text(errors="replace")
-    if len(content) > MAX_FILE_CHARS:
-        content = content[:MAX_FILE_CHARS] + f"\n... truncated after {MAX_FILE_CHARS} characters"
+    if len(content) > max_chars:
+        content = content[:max_chars] + f"\n... truncated after {max_chars} characters"
 
     return f"{_header(workspace)}\npath: {_display_path(file_path, workspace)}\n--- content ---\n{content}"
 

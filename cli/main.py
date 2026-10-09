@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 
+from agent.context_plan import build_context_plan
 from agent.core import CodingAgent
 from agent.task_spec import build_task_spec
 from agent.workspace import WorkspaceResolutionError, resolve_workspace
@@ -41,16 +42,19 @@ def main() -> int:
     try:
         repository = build_repo_map(workspace=workspace.root)
         task_spec = build_task_spec(prompt, workspace.root, repository)
+        context_plan = build_context_plan(task_spec, repository)
         agent = CodingAgent(
             client=OpenAIChatClient(base_url=args.base_url),
             registry=create_registry(
                 workspace.root,
                 allowed_tools=task_spec.allowed_tools(),
                 allowed_write_paths=task_spec.allowed_write_paths,
+                max_read_chars=context_plan.max_chars_per_file,
             ),
             model=args.model,
             workspace=workspace.root,
             task_spec=task_spec,
+            context_plan=context_plan,
             max_steps=args.max_steps,
         )
         result = agent.run(prompt)

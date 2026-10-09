@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from agent.context_plan import build_context_plan
 from agent.core import CodingAgent
 from agent.task_spec import TaskType, build_task_spec
 from tools import create_registry
@@ -117,7 +118,9 @@ class TaskSpecTests(unittest.TestCase):
     def test_agent_injects_task_spec_system_message(self):
         with tempfile.TemporaryDirectory() as workspace_dir:
             workspace = Path(workspace_dir)
-            spec = self._build(workspace, "解释项目架构")
+            repository = build_repo_map(workspace=workspace)
+            spec = build_task_spec("解释项目架构", workspace, repository)
+            context_plan = build_context_plan(spec, repository)
             client = RecordingClient()
             agent = CodingAgent(
                 client=client,
@@ -125,6 +128,7 @@ class TaskSpecTests(unittest.TestCase):
                 model="test-model",
                 workspace=workspace,
                 task_spec=spec,
+                context_plan=context_plan,
             )
 
             result = agent.run("解释项目架构")
@@ -133,6 +137,7 @@ class TaskSpecTests(unittest.TestCase):
             system_contents = [message["content"] for message in client.messages if message["role"] == "system"]
             self.assertTrue(any("Task specification:" in content for content in system_contents))
             self.assertTrue(any('"task_type": "explain_project"' in content for content in system_contents))
+            self.assertTrue(any("Context plan:" in content for content in system_contents))
 
 
 if __name__ == "__main__":
