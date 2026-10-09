@@ -3,9 +3,11 @@ import os
 import sys
 
 from agent.core import CodingAgent
+from agent.task_spec import build_task_spec
 from agent.workspace import WorkspaceResolutionError, resolve_workspace
 from model.openai_chat import OpenAIChatClient
 from tools import create_registry
+from tools.repo import build_repo_map
 
 
 DEFAULT_MODEL = "gpt-4.1-mini"
@@ -37,11 +39,18 @@ def main() -> int:
         return 2
 
     try:
+        repository = build_repo_map(workspace=workspace.root)
+        task_spec = build_task_spec(prompt, workspace.root, repository)
         agent = CodingAgent(
             client=OpenAIChatClient(base_url=args.base_url),
-            registry=create_registry(workspace.root),
+            registry=create_registry(
+                workspace.root,
+                allowed_tools=task_spec.allowed_tools(),
+                allowed_write_paths=task_spec.allowed_write_paths,
+            ),
             model=args.model,
             workspace=workspace.root,
+            task_spec=task_spec,
             max_steps=args.max_steps,
         )
         result = agent.run(prompt)

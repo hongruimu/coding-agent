@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from agent.task_spec import TaskSpec
 from tools.registry import ToolRegistry
 
 
@@ -43,12 +44,14 @@ class CodingAgent:
         registry: ToolRegistry,
         model: str,
         workspace: str | Path,
+        task_spec: TaskSpec,
         max_steps: int = 12,
     ):
         self.client = client
         self.registry = registry
         self.model = model
         self.workspace = Path(workspace).expanduser().resolve()
+        self.task_spec = task_spec
         self.max_steps = max_steps
 
     def run(self, user_prompt: str) -> AgentResult:
@@ -62,6 +65,7 @@ class CodingAgent:
                     "Do not assume paths in the user's prompt are active workspaces unless the CLI selected them."
                 ),
             },
+            {"role": "system", "content": self.task_spec.format_for_prompt()},
             {"role": "user", "content": user_prompt},
         ]
 

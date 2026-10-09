@@ -8,10 +8,18 @@ from tools.search import grep_code, search_files
 from tools.shell import run_command
 
 
-def create_registry(workspace: str | Path = ".") -> ToolRegistry:
+def create_registry(
+    workspace: str | Path = ".",
+    allowed_tools: set[str] | None = None,
+    allowed_write_paths: tuple[str, ...] | None = None,
+) -> ToolRegistry:
     registry = ToolRegistry()
 
-    registry.register(
+    def register(tool: Tool) -> None:
+        if allowed_tools is None or tool.name in allowed_tools:
+            registry.register(tool)
+
+    register(
         Tool(
             name="repo_map",
             description=(
@@ -32,7 +40,7 @@ def create_registry(workspace: str | Path = ".") -> ToolRegistry:
         )
     )
 
-    registry.register(
+    register(
         Tool(
             name="list_files",
             description="List files and directories under a workspace path.",
@@ -50,7 +58,7 @@ def create_registry(workspace: str | Path = ".") -> ToolRegistry:
         )
     )
 
-    registry.register(
+    register(
         Tool(
             name="search_files",
             description="Search workspace file names and paths without reading file contents.",
@@ -78,7 +86,7 @@ def create_registry(workspace: str | Path = ".") -> ToolRegistry:
         )
     )
 
-    registry.register(
+    register(
         Tool(
             name="grep_code",
             description="Search literal text in workspace files and return matching paths, lines, columns, and previews.",
@@ -115,7 +123,7 @@ def create_registry(workspace: str | Path = ".") -> ToolRegistry:
         )
     )
 
-    registry.register(
+    register(
         Tool(
             name="read_file",
             description="Read the contents of a file.",
@@ -133,7 +141,7 @@ def create_registry(workspace: str | Path = ".") -> ToolRegistry:
         )
     )
 
-    registry.register(
+    register(
         Tool(
             name="write_file",
             description="Write complete text content to a file inside the workspace.",
@@ -151,11 +159,11 @@ def create_registry(workspace: str | Path = ".") -> ToolRegistry:
                 },
                 "required": ["path", "content"],
             },
-            function=partial(write_file, workspace=workspace),
+            function=partial(write_file, workspace=workspace, allowed_paths=allowed_write_paths),
         )
     )
 
-    registry.register(
+    register(
         Tool(
             name="run_command",
             description="Run a shell command in the workspace and return stdout, stderr, and exit code.",

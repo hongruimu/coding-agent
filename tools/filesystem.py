@@ -1,3 +1,4 @@
+import fnmatch
 from pathlib import Path
 
 
@@ -75,8 +76,25 @@ def read_file(path: str, *, workspace: str | Path = ".") -> str:
     return f"{_header(workspace)}\npath: {_display_path(file_path, workspace)}\n--- content ---\n{content}"
 
 
-def write_file(path: str, content: str, *, workspace: str | Path = ".") -> str:
+def write_file(
+    path: str,
+    content: str,
+    *,
+    workspace: str | Path = ".",
+    allowed_paths: tuple[str, ...] | None = None,
+) -> str:
     file_path = _safe_path(path, workspace)
+    relative_path = _display_path(file_path, workspace)
+    if allowed_paths is not None and not _is_write_allowed(relative_path, allowed_paths):
+        raise PermissionError(f"Write path is not allowed for this task: {relative_path}")
+
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(content)
-    return f"{_header(workspace)}\nWrote {len(content)} characters to {_display_path(file_path, workspace)}"
+    return f"{_header(workspace)}\nWrote {len(content)} characters to {relative_path}"
+
+
+def _is_write_allowed(path: str, allowed_paths: tuple[str, ...]) -> bool:
+    if "*" in allowed_paths or "**/*" in allowed_paths:
+        return True
+
+    return any(path == pattern or fnmatch.fnmatch(path, pattern) for pattern in allowed_paths)
