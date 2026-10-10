@@ -117,7 +117,16 @@ Options:
   --model MODEL     指定使用的模型，默认读取 CODING_AGENT_MODEL 或 gpt-4.1-mini
   --base-url URL    指定兼容 OpenAI API 的服务地址，默认读取 OPENAI_BASE_URL
   --max-steps N     Agent 最大循环步数，默认 12
+  --log-file PATH   将结构化运行事件追加写入 JSONL 文件
 ```
+
+记录一次可复盘的运行过程：
+
+```bash
+coding-agent --log-file /tmp/coding-agent-run.jsonl "修改 agent/core.py"
+```
+
+日志只记录阶段、工具参数摘要、变更文件、验证结果和完成状态，不记录完整提示词、文件内容或编辑文本。
 
 ## 工作流程
 
@@ -135,7 +144,8 @@ Options:
 10. Evaluate 根据变更类型自动运行验证，并用 EvidenceTable 同时核对工作项和验收标准；
 11. CompletionGate 根据变更、diff、验证、工作项和证据决定进入 Finalize，或回退到 Understand、Evaluate、Execute；
 12. 只读任务跳过写阶段，但仍经过 Evaluate 和 CompletionGate；
-13. 循环执行，直到 Finalize 完成或达到最大步数。
+13. 可选的 EventLogger 以 JSONL 记录阶段、工具、计划、验证、工作项和完成状态；
+14. 循环执行，直到 Finalize 完成或达到最大步数。
 
 ## 安全说明
 

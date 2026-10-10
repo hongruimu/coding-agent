@@ -4,6 +4,7 @@ import sys
 
 from agent.context_plan import build_context_plan
 from agent.core import CodingAgent
+from agent.events import JsonlEventLogger
 from agent.task_spec import build_task_spec
 from agent.workspace import WorkspaceResolutionError, resolve_workspace
 from model.openai_chat import OpenAIChatClient
@@ -21,6 +22,11 @@ def main() -> int:
     parser.add_argument("--model", default=os.getenv("CODING_AGENT_MODEL", DEFAULT_MODEL))
     parser.add_argument("--base-url", default=os.getenv("OPENAI_BASE_URL"), help="Override the OpenAI API base URL.")
     parser.add_argument("--max-steps", type=int, default=12)
+    parser.add_argument(
+        "--log-file",
+        default=os.getenv("CODING_AGENT_LOG_FILE"),
+        help="Append structured JSONL run events to this file.",
+    )
     args = parser.parse_args()
 
     prompt = " ".join(args.prompt).strip()
@@ -57,6 +63,7 @@ def main() -> int:
             context_plan=context_plan,
             repo_map=repository,
             max_steps=args.max_steps,
+            event_logger=JsonlEventLogger(args.log_file) if args.log_file else None,
         )
         result = agent.run(prompt)
     except Exception as exc:

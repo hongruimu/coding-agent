@@ -10,6 +10,7 @@ from agent.execution_plan import (
     WorkItemTracker,
     parse_execution_plan,
 )
+from agent.events import EventLogger, JsonlEventLogger, NullEventLogger, RunEvent, RunTrace
 from agent.project_instructions import (
     InstructionBundle,
     InstructionDocument,
@@ -30,13 +31,18 @@ __all__ = [
     "ContextPlan",
     "ContextStore",
     "EvidenceItem",
+    "EventLogger",
     "ExecutionPlan",
     "InstructionBundle",
     "InstructionDocument",
+    "JsonlEventLogger",
+    "NullEventLogger",
     "PhaseArtifact",
     "PlanParseResult",
     "PlanStep",
     "ProjectInstructions",
+    "RunEvent",
+    "RunTrace",
     "TaskSpec",
     "TaskType",
     "ToolObservation",
