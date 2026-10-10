@@ -69,6 +69,8 @@ def main() -> int:
     if result.validation_results:
         validation_status = "passed" if all(item.passed for item in result.validation_results) else "failed"
         print(f"\n[validation={validation_status}]")
+    if result.evidence:
+        print(f"\n[evidence_items={len(result.evidence)}]")
     print(f"\n[phase={result.phase.value}]")
     print(f"\n[steps_used={result.steps_used}]")
     return 0

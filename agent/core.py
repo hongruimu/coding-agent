@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from agent.context_plan import ContextPlan
+from agent.context_store import ContextStore, EvidenceItem, PhaseArtifact
 from agent.task_spec import TaskSpec
 from agent.validation import ValidationResult, build_validation_plan, execute_validation_plan
 from tools.repo import RepoMap, build_repo_map
@@ -50,6 +51,8 @@ class AgentResult:
     steps_used: int
     changed_files: tuple[str, ...] = ()
     validation_results: tuple[ValidationResult, ...] = ()
+    phase_artifacts: tuple[PhaseArtifact, ...] = ()
+    evidence: tuple[EvidenceItem, ...] = ()
     phase: AgentPhase = AgentPhase.FINALIZE
 
 
@@ -69,6 +72,7 @@ class CodingAgent:
         context_plan: ContextPlan,
         max_steps: int = 12,
         repo_map: RepoMap | None = None,
+        context_store: ContextStore | None = None,
     ):
         self.client = client
         self.registry = registry
@@ -77,6 +81,7 @@ class CodingAgent:
         self.task_spec = task_spec
         self.context_plan = context_plan
         self.repo_map = repo_map or build_repo_map(workspace=self.workspace)
+        self.context_store = context_store or ContextStore()
         self.max_steps = max_steps
         self._read_files: set[str] = set()
         self._changed_files: list[str] = []
@@ -86,8 +91,9 @@ class CodingAgent:
         self._read_files.clear()
         self._changed_files.clear()
         self._validation_results.clear()
+        self.context_store.reset()
         phase = AgentPhase.UNDERSTAND
-        messages: list[dict[str, Any]] = [
+        base_messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "system",
@@ -107,8 +113,8 @@ class CodingAgent:
                 ),
             },
             {"role": "user", "content": user_prompt},
-            self._phase_message(phase),
         ]
+        messages = [*base_messages, self._phase_message(phase)]
 
         latest_content = ""
         for step in range(1, self.max_steps + 1):
@@ -128,28 +134,57 @@ class CodingAgent:
 
             if tool_calls:
                 for tool_call in tool_calls:
+                    arguments = self._tool_arguments(tool_call)
                     result = self._execute_tool(tool_call, allowed_tools=allowed_tools)
+                    visible_result = self.context_store.record_tool_result(
+                        phase=phase.value,
+                        step=step,
+                        tool_name=tool_call.function.name,
+                        arguments=arguments,
+                        result=result,
+                    )
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call.id,
-                            "content": result,
+                            "content": visible_result,
                         }
                     )
                 continue
 
             if phase is AgentPhase.FINALIZE:
+                self.context_store.complete_phase(
+                    phase=phase.value,
+                    summary=latest_content,
+                    changed_files=tuple(self._changed_files),
+                    validation_results=tuple(self._validation_results),
+                )
                 return AgentResult(
                     answer=latest_content,
                     steps_used=step,
                     changed_files=tuple(self._changed_files),
                     validation_results=tuple(self._validation_results),
+                    phase_artifacts=tuple(self.context_store.phase_artifacts),
+                    evidence=tuple(self.context_store.evidence),
                     phase=phase,
                 )
 
+            self.context_store.complete_phase(
+                phase=phase.value,
+                summary=message.content or "",
+                changed_files=tuple(self._changed_files),
+                validation_results=tuple(self._validation_results) if phase is AgentPhase.EVALUATE else (),
+            )
             phase = self._next_phase(phase, message.content or "")
+            validation_message = None
             if phase is AgentPhase.EVALUATE:
-                self._append_automatic_validation(messages)
+                validation_message = self._automatic_validation_message()
+            messages = [
+                *base_messages,
+                {"role": "system", "content": self.context_store.format_for_prompt()},
+            ]
+            if validation_message is not None:
+                messages.append(validation_message)
             messages.append(self._phase_message(phase))
 
         changed = ", ".join(self._changed_files) if self._changed_files else "none"
@@ -163,23 +198,27 @@ class CodingAgent:
             steps_used=self.max_steps,
             changed_files=tuple(self._changed_files),
             validation_results=tuple(self._validation_results),
+            phase_artifacts=tuple(self.context_store.phase_artifacts),
+            evidence=tuple(self.context_store.evidence),
             phase=phase,
         )
 
     def _append_automatic_validation(self, messages: list[dict[str, Any]]) -> None:
+        messages.append(self._automatic_validation_message())
+
+    def _automatic_validation_message(self) -> dict[str, str]:
         plan = build_validation_plan(self.repo_map, tuple(self._changed_files))
         results = execute_validation_plan(plan, self.workspace)
         self._validation_results[:] = results
+        self.context_store.record_validation(AgentPhase.EVALUATE.value, results)
         if results:
             formatted_results = "\n".join(result.format_for_prompt() for result in results)
         else:
             formatted_results = "No validation commands were executed."
-        messages.append(
-            {
-                "role": "system",
-                "content": f"Automatic validation:\n{plan.format_for_prompt()}\nResults:\n{formatted_results}",
-            }
-        )
+        return {
+            "role": "system",
+            "content": f"Automatic validation:\n{plan.format_for_prompt()}\nResults:\n{formatted_results}",
+        }
 
     def _phase_message(self, phase: AgentPhase) -> dict[str, str]:
         instructions = {
@@ -299,6 +338,13 @@ class CodingAgent:
             return result
 
         return json.dumps(result, ensure_ascii=False)
+
+    def _tool_arguments(self, tool_call: Any) -> dict[str, Any]:
+        try:
+            arguments = json.loads(tool_call.function.arguments or "{}")
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return arguments if isinstance(arguments, dict) else {}
 
     def _changed_path(self, name: str, arguments: dict[str, Any]) -> str | None:
         if name not in {"write_file", "replace_text"} or not isinstance(arguments.get("path"), str):

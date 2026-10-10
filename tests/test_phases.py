@@ -94,6 +94,7 @@ class PhaseTests(unittest.TestCase):
             self.assertEqual(("app.py",), result.changed_files)
             self.assertTrue(result.validation_results)
             self.assertTrue(all(item.passed for item in result.validation_results))
+            self.assertTrue(any(item.kind == "validation" for item in result.evidence))
             self.assertEqual(AgentPhase.FINALIZE, result.phase)
 
     def test_read_only_task_skips_write_phases(self):
