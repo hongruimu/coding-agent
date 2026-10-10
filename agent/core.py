@@ -6,6 +6,8 @@ from typing import Any, Protocol
 
 from agent.context_plan import ContextPlan
 from agent.task_spec import TaskSpec
+from agent.validation import ValidationResult, build_validation_plan, execute_validation_plan
+from tools.repo import RepoMap, build_repo_map
 from tools.registry import ToolRegistry
 
 
@@ -47,6 +49,7 @@ class AgentResult:
     answer: str
     steps_used: int
     changed_files: tuple[str, ...] = ()
+    validation_results: tuple[ValidationResult, ...] = ()
     phase: AgentPhase = AgentPhase.FINALIZE
 
 
@@ -65,6 +68,7 @@ class CodingAgent:
         task_spec: TaskSpec,
         context_plan: ContextPlan,
         max_steps: int = 12,
+        repo_map: RepoMap | None = None,
     ):
         self.client = client
         self.registry = registry
@@ -72,13 +76,16 @@ class CodingAgent:
         self.workspace = Path(workspace).expanduser().resolve()
         self.task_spec = task_spec
         self.context_plan = context_plan
+        self.repo_map = repo_map or build_repo_map(workspace=self.workspace)
         self.max_steps = max_steps
         self._read_files: set[str] = set()
         self._changed_files: list[str] = []
+        self._validation_results: list[ValidationResult] = []
 
     def run(self, user_prompt: str) -> AgentResult:
         self._read_files.clear()
         self._changed_files.clear()
+        self._validation_results.clear()
         phase = AgentPhase.UNDERSTAND
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -136,10 +143,13 @@ class CodingAgent:
                     answer=latest_content,
                     steps_used=step,
                     changed_files=tuple(self._changed_files),
+                    validation_results=tuple(self._validation_results),
                     phase=phase,
                 )
 
             phase = self._next_phase(phase, message.content or "")
+            if phase is AgentPhase.EVALUATE:
+                self._append_automatic_validation(messages)
             messages.append(self._phase_message(phase))
 
         changed = ", ".join(self._changed_files) if self._changed_files else "none"
@@ -152,7 +162,23 @@ class CodingAgent:
             answer=answer,
             steps_used=self.max_steps,
             changed_files=tuple(self._changed_files),
+            validation_results=tuple(self._validation_results),
             phase=phase,
+        )
+
+    def _append_automatic_validation(self, messages: list[dict[str, Any]]) -> None:
+        plan = build_validation_plan(self.repo_map, tuple(self._changed_files))
+        results = execute_validation_plan(plan, self.workspace)
+        self._validation_results[:] = results
+        if results:
+            formatted_results = "\n".join(result.format_for_prompt() for result in results)
+        else:
+            formatted_results = "No validation commands were executed."
+        messages.append(
+            {
+                "role": "system",
+                "content": f"Automatic validation:\n{plan.format_for_prompt()}\nResults:\n{formatted_results}",
+            }
         )
 
     def _phase_message(self, phase: AgentPhase) -> dict[str, str]:
@@ -170,9 +196,9 @@ class CodingAgent:
                 "and inspect each automatically returned diff."
             ),
             AgentPhase.EVALUATE: (
-                "Review changed files and diffs, then run the most relevant available validation. "
-                "Do not modify files in this phase. If a fix is still required, start the phase summary with "
-                "[NEEDS_CHANGES] so the program can return to Execute."
+                "Review the automatic validation results, changed files, and diffs. Use read_file or git_diff for "
+                "additional evidence, but do not modify files. If a fix is still required, start the phase summary "
+                "with [NEEDS_CHANGES] so the program can return to Execute."
             ),
             AgentPhase.FINALIZE: (
                 "Produce the final answer without calling tools. Summarize the result, changed files, validation, "
@@ -180,9 +206,13 @@ class CodingAgent:
             ),
         }
         changed = ", ".join(self._changed_files) if self._changed_files else "none"
+        validation = self._validation_status()
         return {
             "role": "system",
-            "content": f"Current phase: {phase.value}\nChanged files so far: {changed}\n{instructions[phase]}",
+            "content": (
+                f"Current phase: {phase.value}\nChanged files so far: {changed}\n"
+                f"Validation status: {validation}\n{instructions[phase]}"
+            ),
         }
 
     def _allowed_tools(self, phase: AgentPhase) -> set[str]:
@@ -192,11 +222,13 @@ class CodingAgent:
         if phase is AgentPhase.EXECUTE:
             return available.intersection(self.task_spec.allowed_tools())
         if phase is AgentPhase.EVALUATE:
-            allowed = set(EVALUATION_TOOLS)
-            if self.task_spec.shell_allowed:
-                allowed.add("run_command")
-            return available.intersection(allowed)
+            return available.intersection(EVALUATION_TOOLS)
         return set()
+
+    def _validation_status(self) -> str:
+        if not self._validation_results:
+            return "not run"
+        return "passed" if all(result.passed for result in self._validation_results) else "failed"
 
     def _next_phase(self, phase: AgentPhase, phase_output: str = "") -> AgentPhase:
         if phase is AgentPhase.UNDERSTAND:

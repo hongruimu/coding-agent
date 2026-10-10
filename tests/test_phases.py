@@ -89,9 +89,11 @@ class PhaseTests(unittest.TestCase):
             self.assertNotIn("replace_text", plan_tools)
             self.assertIn("replace_text", execute_tools)
             self.assertIn("run_command", execute_tools)
-            self.assertEqual({"git_diff", "read_file", "run_command"}, evaluate_tools)
+            self.assertEqual({"git_diff", "read_file"}, evaluate_tools)
             self.assertEqual(set(), finalize_tools)
             self.assertEqual(("app.py",), result.changed_files)
+            self.assertTrue(result.validation_results)
+            self.assertTrue(all(item.passed for item in result.validation_results))
             self.assertEqual(AgentPhase.FINALIZE, result.phase)
 
     def test_read_only_task_skips_write_phases(self):

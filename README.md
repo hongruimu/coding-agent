@@ -27,6 +27,7 @@
 - 每次成功编辑后自动返回对应 diff，并记录本轮 `changed_files`；
 - 通过程序控制的 Understand、Plan、Execute、Evaluate、Finalize 状态机限制各阶段工具权限；
 - Evaluate 发现问题时可通过结构化信号返回 Execute 继续修正；
+- Evaluate 由程序根据变更类型自动选择并执行验证命令，不再开放任意 Shell；
 - 对文件路径访问做了工作区边界限制，降低误操作风险。
 
 ## 项目结构
@@ -126,8 +127,8 @@ Options:
 3. 根据任务类型和项目结构生成 `ContextPlan`，确定读取顺序和预算；
 4. 按 `TaskSpec` 的读写和 Shell 权限注册可用工具；
 5. Agent 进入 Understand 阶段，并按当前阶段动态裁剪工具；
-6. 写任务依次经过 Plan、Execute 和 Evaluate，只读任务跳过写阶段；
-7. Finalize 阶段不再提供工具，只生成最终总结；
+6. 写任务依次经过 Plan、Execute 和 Evaluate，Evaluate 根据变更类型自动运行验证；
+7. 只读任务跳过写阶段，Finalize 阶段不再提供工具，只生成最终总结；
 8. 循环执行，直到 Finalize 完成或达到最大步数。
 
 ## 安全说明
