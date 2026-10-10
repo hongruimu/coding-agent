@@ -20,7 +20,7 @@ class ToolRegistry:
     def get(self, name: str) -> Tool:
         return self._tools[name]
 
-    def definitions(self) -> list[dict]:
+    def definitions(self, allowed_names: set[str] | None = None) -> list[dict]:
         return [
             {
                 "type": "function",
@@ -31,6 +31,7 @@ class ToolRegistry:
                 },
             }
             for tool in self._tools.values()
+            if allowed_names is None or tool.name in allowed_names
         ]
 
     def execute(self, name: str, arguments: dict):

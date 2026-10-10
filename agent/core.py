@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -29,11 +30,24 @@ Rules:
 """
 
 
+DISCOVERY_TOOLS = frozenset({"repo_map", "search_files", "grep_code", "list_files", "read_file"})
+EVALUATION_TOOLS = frozenset({"read_file", "git_diff"})
+
+
+class AgentPhase(str, Enum):
+    UNDERSTAND = "understand"
+    PLAN = "plan"
+    EXECUTE = "execute"
+    EVALUATE = "evaluate"
+    FINALIZE = "finalize"
+
+
 @dataclass
 class AgentResult:
     answer: str
     steps_used: int
     changed_files: tuple[str, ...] = ()
+    phase: AgentPhase = AgentPhase.FINALIZE
 
 
 class ChatClient(Protocol):
@@ -65,6 +79,7 @@ class CodingAgent:
     def run(self, user_prompt: str) -> AgentResult:
         self._read_files.clear()
         self._changed_files.clear()
+        phase = AgentPhase.UNDERSTAND
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -85,14 +100,16 @@ class CodingAgent:
                 ),
             },
             {"role": "user", "content": user_prompt},
+            self._phase_message(phase),
         ]
 
-        final_answer = ""
+        latest_content = ""
         for step in range(1, self.max_steps + 1):
+            allowed_tools = self._allowed_tools(phase)
             response = self.client.create(
                 model=self.model,
                 messages=messages,
-                tools=self.registry.definitions(),
+                tools=self.registry.definitions(allowed_tools),
             )
             message = response.choices[0].message
             tool_calls = message.tool_calls or []
@@ -100,37 +117,103 @@ class CodingAgent:
             messages.append(self._assistant_message(message))
 
             if message.content:
-                final_answer = message.content
+                latest_content = message.content
 
-            if not tool_calls:
-                return AgentResult(answer=final_answer, steps_used=step, changed_files=tuple(self._changed_files))
+            if tool_calls:
+                for tool_call in tool_calls:
+                    result = self._execute_tool(tool_call, allowed_tools=allowed_tools)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result,
+                        }
+                    )
+                continue
 
-            for tool_call in tool_calls:
-                result = self._execute_tool(tool_call)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": result,
-                    }
+            if phase is AgentPhase.FINALIZE:
+                return AgentResult(
+                    answer=latest_content,
+                    steps_used=step,
+                    changed_files=tuple(self._changed_files),
+                    phase=phase,
                 )
 
-        messages.append(
-            {
-                "role": "user",
-                "content": "You reached the step limit. Summarize progress, files changed, validation, and next action.",
-            }
+            phase = self._next_phase(phase, message.content or "")
+            messages.append(self._phase_message(phase))
+
+        changed = ", ".join(self._changed_files) if self._changed_files else "none"
+        limit_message = (
+            f"Step limit reached during {phase.value} phase. "
+            f"Changed files: {changed}. The task may be incomplete."
         )
-        response = self.client.create(
-            model=self.model,
-            messages=messages,
-            tools=self.registry.definitions(),
-        )
+        answer = f"{latest_content}\n\n{limit_message}" if latest_content else limit_message
         return AgentResult(
-            answer=response.choices[0].message.content or final_answer,
+            answer=answer,
             steps_used=self.max_steps,
             changed_files=tuple(self._changed_files),
+            phase=phase,
         )
+
+    def _phase_message(self, phase: AgentPhase) -> dict[str, str]:
+        instructions = {
+            AgentPhase.UNDERSTAND: (
+                "Inspect the repository evidence needed to understand the request. "
+                "Do not modify files or run shell commands. When the request is understood, respond with a concise understanding."
+            ),
+            AgentPhase.PLAN: (
+                "Create a short, concrete execution plan based on inspected evidence. "
+                "Do not modify files or run shell commands."
+            ),
+            AgentPhase.EXECUTE: (
+                "Carry out the plan using focused changes. Read before editing, use replace_text for existing files, "
+                "and inspect each automatically returned diff."
+            ),
+            AgentPhase.EVALUATE: (
+                "Review changed files and diffs, then run the most relevant available validation. "
+                "Do not modify files in this phase. If a fix is still required, start the phase summary with "
+                "[NEEDS_CHANGES] so the program can return to Execute."
+            ),
+            AgentPhase.FINALIZE: (
+                "Produce the final answer without calling tools. Summarize the result, changed files, validation, "
+                "and remaining risks."
+            ),
+        }
+        changed = ", ".join(self._changed_files) if self._changed_files else "none"
+        return {
+            "role": "system",
+            "content": f"Current phase: {phase.value}\nChanged files so far: {changed}\n{instructions[phase]}",
+        }
+
+    def _allowed_tools(self, phase: AgentPhase) -> set[str]:
+        available = set(self.registry.names())
+        if phase in {AgentPhase.UNDERSTAND, AgentPhase.PLAN}:
+            return available.intersection(DISCOVERY_TOOLS)
+        if phase is AgentPhase.EXECUTE:
+            return available.intersection(self.task_spec.allowed_tools())
+        if phase is AgentPhase.EVALUATE:
+            allowed = set(EVALUATION_TOOLS)
+            if self.task_spec.shell_allowed:
+                allowed.add("run_command")
+            return available.intersection(allowed)
+        return set()
+
+    def _next_phase(self, phase: AgentPhase, phase_output: str = "") -> AgentPhase:
+        if phase is AgentPhase.UNDERSTAND:
+            if self.task_spec.plan_required:
+                return AgentPhase.PLAN
+            if self.task_spec.write_allowed:
+                return AgentPhase.EXECUTE
+            return AgentPhase.FINALIZE
+        if phase is AgentPhase.PLAN:
+            return AgentPhase.EXECUTE if self.task_spec.write_allowed else AgentPhase.FINALIZE
+        if phase is AgentPhase.EXECUTE:
+            return AgentPhase.EVALUATE
+        if phase is AgentPhase.EVALUATE:
+            if phase_output.lstrip().casefold().startswith("[needs_changes]"):
+                return AgentPhase.EXECUTE
+            return AgentPhase.FINALIZE
+        return AgentPhase.FINALIZE
 
     def _assistant_message(self, message: Any) -> dict[str, Any]:
         assistant_message: dict[str, Any] = {
@@ -153,8 +236,11 @@ class CodingAgent:
 
         return assistant_message
 
-    def _execute_tool(self, tool_call: Any) -> str:
+    def _execute_tool(self, tool_call: Any, allowed_tools: set[str] | None = None) -> str:
         name = tool_call.function.name
+        if allowed_tools is not None and name not in allowed_tools:
+            return f"Tool {name} blocked: it is not allowed during the current phase."
+
         try:
             arguments = json.loads(tool_call.function.arguments or "{}")
             read_path = self._read_path_for_budget(name, arguments)

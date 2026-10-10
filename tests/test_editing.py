@@ -17,12 +17,16 @@ from tools.repo import build_repo_map
 
 class EditingClient:
     def __init__(self):
-        self.calls = 0
+        self.edited = False
         self.diff_result = ""
 
     def create(self, *, model, messages, tools):
-        self.calls += 1
-        if self.calls == 1:
+        tool_names = {tool["function"]["name"] for tool in tools}
+        if messages[-1]["role"] == "tool":
+            self.diff_result = messages[-1]["content"]
+
+        if "replace_text" in tool_names and not self.edited:
+            self.edited = True
             function = SimpleNamespace(
                 name="replace_text",
                 arguments=json.dumps({"path": "app.py", "old_text": "VALUE = 1", "new_text": "VALUE = 2"}),
@@ -30,8 +34,8 @@ class EditingClient:
             tool_call = SimpleNamespace(id="call-1", type="function", function=function)
             message = SimpleNamespace(content=None, tool_calls=[tool_call])
         else:
-            self.diff_result = messages[-1]["content"]
-            message = SimpleNamespace(content="updated", tool_calls=None)
+            content = "updated" if not tools else "phase complete"
+            message = SimpleNamespace(content=content, tool_calls=None)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 

@@ -11,9 +11,11 @@ class OpenAIChatClient:
         self.client = OpenAI(base_url=base_url) if base_url else OpenAI()
 
     def create(self, *, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]):
-        return self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-        )
+        arguments: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+        }
+        if tools:
+            arguments["tools"] = tools
+            arguments["tool_choice"] = "auto"
+        return self.client.chat.completions.create(**arguments)
