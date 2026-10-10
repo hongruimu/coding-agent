@@ -7,6 +7,12 @@ from typing import Any, Protocol
 from agent.completion import CompletionReport, evaluate_completion
 from agent.context_plan import ContextPlan
 from agent.context_store import ContextStore, EvidenceItem, PhaseArtifact
+from agent.execution_plan import (
+    ExecutionPlan,
+    WorkItemState,
+    WorkItemTracker,
+    parse_execution_plan,
+)
 from agent.task_spec import TaskSpec
 from agent.validation import ValidationPlan, ValidationResult, build_validation_plan, execute_validation_plan
 from tools.repo import RepoMap, build_repo_map
@@ -54,6 +60,8 @@ class AgentResult:
     validation_results: tuple[ValidationResult, ...] = ()
     phase_artifacts: tuple[PhaseArtifact, ...] = ()
     evidence: tuple[EvidenceItem, ...] = ()
+    execution_plan: ExecutionPlan | None = None
+    work_items: tuple[WorkItemState, ...] = ()
     completion_report: CompletionReport | None = None
     phase: AgentPhase = AgentPhase.FINALIZE
 
@@ -76,6 +84,7 @@ class CodingAgent:
         repo_map: RepoMap | None = None,
         context_store: ContextStore | None = None,
         max_completion_retries: int = 2,
+        max_plan_retries: int = 2,
     ):
         self.client = client
         self.registry = registry
@@ -87,12 +96,16 @@ class CodingAgent:
         self.context_store = context_store or ContextStore()
         self.max_steps = max_steps
         self.max_completion_retries = max_completion_retries
+        self.max_plan_retries = max_plan_retries
         self._read_files: set[str] = set()
         self._changed_files: list[str] = []
         self._validation_results: list[ValidationResult] = []
         self._validation_plan: ValidationPlan | None = None
         self._completion_report: CompletionReport | None = None
         self._completion_attempt = 0
+        self._execution_plan: ExecutionPlan | None = None
+        self._work_item_tracker: WorkItemTracker | None = None
+        self._plan_attempt = 0
 
     def run(self, user_prompt: str) -> AgentResult:
         self._read_files.clear()
@@ -101,6 +114,9 @@ class CodingAgent:
         self._validation_plan = None
         self._completion_report = None
         self._completion_attempt = 0
+        self._execution_plan = None
+        self._work_item_tracker = None
+        self._plan_attempt = 0
         self.context_store.reset()
         phase = AgentPhase.UNDERSTAND
         base_messages: list[dict[str, Any]] = [
@@ -176,6 +192,8 @@ class CodingAgent:
                     validation_results=tuple(self._validation_results),
                     phase_artifacts=tuple(self.context_store.phase_artifacts),
                     evidence=tuple(self.context_store.evidence),
+                    execution_plan=self._execution_plan,
+                    work_items=self._work_items(),
                     completion_report=self._completion_report,
                     phase=phase,
                 )
@@ -186,9 +204,27 @@ class CodingAgent:
                 changed_files=tuple(self._changed_files),
                 validation_results=tuple(self._validation_results) if phase is AgentPhase.EVALUATE else (),
             )
-            completion_message = None
-            if phase is AgentPhase.EVALUATE:
+            phase_feedback = None
+            if phase is AgentPhase.PLAN:
+                self._plan_attempt += 1
+                plan_result = parse_execution_plan(message.content or "", self.task_spec)
+                phase_feedback = {"role": "system", "content": plan_result.format_for_prompt()}
+                if plan_result.ready:
+                    assert plan_result.plan is not None
+                    self._execution_plan = plan_result.plan
+                    self._work_item_tracker = WorkItemTracker(plan_result.plan)
+                    phase = AgentPhase.EXECUTE
+                elif self._plan_attempt <= self.max_plan_retries:
+                    phase = AgentPhase.PLAN
+                else:
+                    phase = AgentPhase.FINALIZE
+            elif phase is AgentPhase.EVALUATE:
                 self._completion_attempt += 1
+                work_item_report = None
+                if self._work_item_tracker is not None:
+                    work_item_report = self._work_item_tracker.update(
+                        message.content or "", tuple(self.context_store.evidence)
+                    )
                 self._completion_report = evaluate_completion(
                     task_spec=self.task_spec,
                     changed_files=tuple(self._changed_files),
@@ -198,8 +234,10 @@ class CodingAgent:
                     evaluation_output=message.content or "",
                     attempt=self._completion_attempt,
                     max_retries=self.max_completion_retries,
+                    execution_plan=self._execution_plan,
+                    work_item_report=work_item_report,
                 )
-                completion_message = {"role": "system", "content": self._completion_report.format_for_prompt()}
+                phase_feedback = {"role": "system", "content": self._completion_report.format_for_prompt()}
                 phase = self._phase_after_completion(self._completion_report)
             else:
                 phase = self._next_phase(phase)
@@ -210,10 +248,12 @@ class CodingAgent:
                 *base_messages,
                 {"role": "system", "content": self.context_store.format_for_prompt()},
             ]
+            if self._work_item_tracker is not None:
+                messages.append({"role": "system", "content": self._work_item_tracker.format_for_prompt()})
             if validation_message is not None:
                 messages.append(validation_message)
-            if completion_message is not None:
-                messages.append(completion_message)
+            if phase_feedback is not None:
+                messages.append(phase_feedback)
             messages.append(self._phase_message(phase))
 
         changed = ", ".join(self._changed_files) if self._changed_files else "none"
@@ -229,6 +269,8 @@ class CodingAgent:
             validation_results=tuple(self._validation_results),
             phase_artifacts=tuple(self.context_store.phase_artifacts),
             evidence=tuple(self.context_store.evidence),
+            execution_plan=self._execution_plan,
+            work_items=self._work_items(),
             completion_report=self._completion_report,
             phase=phase,
         )
@@ -258,19 +300,22 @@ class CodingAgent:
                 "Do not modify files or run shell commands. When the request is understood, respond with a concise understanding."
             ),
             AgentPhase.PLAN: (
-                "Create a short, concrete execution plan based on inspected evidence. "
-                "Do not modify files or run shell commands."
+                "Create a short execution plan based on inspected evidence. Do not modify files or run shell commands. "
+                "End with a [PLAN] JSON object containing 1-6 steps. Every step must have id, objective, target_files, "
+                "acceptance_criteria, and validation_hint. target_files are files the step expects to change and must "
+                "respect TaskSpec.allowed_write_paths. acceptance_criteria contains zero-based TaskSpec criterion indexes, "
+                "and the complete plan must cover every criterion and explicit target file."
             ),
             AgentPhase.EXECUTE: (
-                "Carry out the plan using focused changes. Read before editing, use replace_text for existing files, "
-                "and inspect each automatically returned diff."
+                "Carry out the pending or incomplete work items using focused changes. Read before editing, use "
+                "replace_text for existing files, and inspect each automatically returned diff."
             ),
             AgentPhase.EVALUATE: (
                 "Review the automatic validation results, changed files, and diffs. Use read_file or git_diff for "
                 "additional evidence, but do not modify files. If a fix is still required, start the phase summary "
-                "with [NEEDS_CHANGES]. Always end with a [COMPLETION] JSON object containing a criteria list. "
-                "Include every acceptance criterion index exactly once with satisfied=true or false and an evidence "
-                "list containing exact source values from the EvidenceTable."
+                "with [NEEDS_CHANGES]. Always end with a [COMPLETION] JSON object containing work_items and criteria "
+                "lists. Include every execution plan step id and acceptance criterion index exactly once with "
+                "satisfied=true or false. Completed entries must cite exact source values from the EvidenceTable."
             ),
             AgentPhase.FINALIZE: (
                 "Produce the final answer without calling tools. Summarize the result, changed files, validation, "
@@ -319,6 +364,11 @@ class CodingAgent:
         if report.ready or not report.retry_allowed or report.retry_phase is None:
             return AgentPhase.FINALIZE
         return AgentPhase(report.retry_phase)
+
+    def _work_items(self) -> tuple[WorkItemState, ...]:
+        if self._work_item_tracker is None:
+            return ()
+        return self._work_item_tracker.report.states
 
     def _assistant_message(self, message: Any) -> dict[str, Any]:
         assistant_message: dict[str, Any] = {

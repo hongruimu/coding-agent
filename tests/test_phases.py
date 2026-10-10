@@ -14,13 +14,23 @@ from tools.repo import build_repo_map
 
 
 class PhaseClient:
-    def __init__(self, edit: bool = False, rework_once: bool = False, read_only: bool = False):
+    def __init__(
+        self,
+        edit: bool = False,
+        rework_once: bool = False,
+        read_only: bool = False,
+        invalid_plan_once: bool = False,
+        invalid_plan_always: bool = False,
+    ):
         self.edit = edit
         self.rework_once = rework_once
         self.read_only = read_only
+        self.invalid_plan_once = invalid_plan_once
+        self.invalid_plan_always = invalid_plan_always
         self.inspected = False
         self.edit_count = 0
         self.evaluation_count = 0
+        self.plan_count = 0
         self.records: list[tuple[str, set[str]]] = []
 
     def create(self, *, model, messages, tools):
@@ -61,6 +71,10 @@ class PhaseClient:
             if phase == AgentPhase.EVALUATE.value:
                 self.evaluation_count += 1
                 content = _completion_output(messages, "app.py")
+            elif phase == AgentPhase.PLAN.value:
+                self.plan_count += 1
+                invalid_plan = self.invalid_plan_always or (self.invalid_plan_once and self.plan_count == 1)
+                content = "invalid plan" if invalid_plan else _plan_output(messages)
             else:
                 content = f"{phase} complete"
             message = SimpleNamespace(content=content, tool_calls=None)
@@ -108,6 +122,8 @@ class PhaseTests(unittest.TestCase):
             self.assertTrue(all(item.passed for item in result.validation_results))
             self.assertTrue(any(item.kind == "validation" for item in result.evidence))
             self.assertTrue(any(item.kind == "diff" and item.source == "app.py" for item in result.evidence))
+            self.assertIsNotNone(result.execution_plan)
+            self.assertEqual(["completed"], [item.status.value for item in result.work_items])
             self.assertIsNotNone(result.completion_report)
             self.assertTrue(result.completion_report.ready)
             self.assertEqual(AgentPhase.FINALIZE, result.phase)
@@ -159,6 +175,67 @@ class PhaseTests(unittest.TestCase):
             self.assertIn("execute", phases[first_evaluate + 1 :])
             self.assertEqual("VALUE = 3\n", (workspace / "app.py").read_text())
             self.assertEqual(AgentPhase.FINALIZE, result.phase)
+
+    def test_invalid_structured_plan_retries_plan_phase(self):
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            self._init_git(workspace)
+            (workspace / "app.py").write_text("VALUE = 1\n")
+            subprocess.run(["git", "add", "app.py"], cwd=workspace, check=True, capture_output=True)
+            repository = build_repo_map(workspace=workspace)
+            task_spec = build_task_spec("修改 app.py", workspace, repository)
+            context_plan = build_context_plan(task_spec, repository)
+            client = PhaseClient(edit=True, invalid_plan_once=True)
+            agent = CodingAgent(
+                client=client,
+                registry=create_registry(
+                    workspace,
+                    allowed_tools=task_spec.allowed_tools(),
+                    allowed_write_paths=task_spec.allowed_write_paths,
+                ),
+                model="test-model",
+                workspace=workspace,
+                task_spec=task_spec,
+                context_plan=context_plan,
+            )
+
+            result = agent.run("修改 app.py")
+
+            phases = [phase for phase, _ in client.records]
+            self.assertEqual(2, phases.count("plan"))
+            self.assertIsNotNone(result.execution_plan)
+            self.assertTrue(result.completion_report.ready)
+
+    def test_plan_retry_limit_finalizes_without_execution(self):
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            (workspace / "app.py").write_text("VALUE = 1\n")
+            repository = build_repo_map(workspace=workspace)
+            task_spec = build_task_spec("修改 app.py", workspace, repository)
+            context_plan = build_context_plan(task_spec, repository)
+            client = PhaseClient(edit=True, invalid_plan_always=True)
+            agent = CodingAgent(
+                client=client,
+                registry=create_registry(
+                    workspace,
+                    allowed_tools=task_spec.allowed_tools(),
+                    allowed_write_paths=task_spec.allowed_write_paths,
+                ),
+                model="test-model",
+                workspace=workspace,
+                task_spec=task_spec,
+                context_plan=context_plan,
+                max_plan_retries=1,
+            )
+
+            result = agent.run("修改 app.py")
+
+            self.assertEqual(
+                ["understand", "plan", "plan", "finalize"],
+                [phase for phase, _ in client.records],
+            )
+            self.assertIsNone(result.execution_plan)
+            self.assertEqual((), result.changed_files)
 
     def test_step_limit_reports_current_phase(self):
         with tempfile.TemporaryDirectory() as workspace_dir:
@@ -230,6 +307,15 @@ def _current_phase(messages: list[dict]) -> str:
 
 
 def _completion_output(messages: list[dict], source: str) -> str:
+    work_items = []
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "system" and isinstance(content, str) and content.startswith("Execution plan:"):
+            plan, _ = json.JSONDecoder().raw_decode(content.removeprefix("Execution plan:\n"))
+            work_items = [
+                {"id": step["id"], "satisfied": True, "evidence": [source]}
+                for step in plan["steps"]
+            ]
     for message in messages:
         content = message.get("content")
         if message.get("role") == "system" and isinstance(content, str) and content.startswith("Task specification:"):
@@ -238,7 +324,25 @@ def _completion_output(messages: list[dict], source: str) -> str:
                 {"index": index, "satisfied": True, "evidence": [source]}
                 for index, _ in enumerate(task_spec["acceptance_criteria"])
             ]
-            return "Evaluation complete.\n[COMPLETION]\n" + json.dumps({"criteria": criteria})
+            return "Evaluation complete.\n[COMPLETION]\n" + json.dumps(
+                {"work_items": work_items, "criteria": criteria}
+            )
+    raise AssertionError("Task specification message was not found")
+
+
+def _plan_output(messages: list[dict]) -> str:
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "system" and isinstance(content, str) and content.startswith("Task specification:"):
+            task_spec = json.loads(content.removeprefix("Task specification:\n"))
+            step = {
+                "id": "step-1",
+                "objective": "Implement the requested change.",
+                "target_files": task_spec["target_files"],
+                "acceptance_criteria": list(range(len(task_spec["acceptance_criteria"]))),
+                "validation_hint": "Run automatic validation.",
+            }
+            return "[PLAN]\n" + json.dumps({"steps": [step]})
     raise AssertionError("Task specification message was not found")
 
 

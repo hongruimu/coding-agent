@@ -129,9 +129,12 @@ Options:
 4. 按 `TaskSpec` 的读写和 Shell 权限注册可用工具；
 5. Agent 进入 Understand 阶段，并按当前阶段动态裁剪工具；
 6. 每个阶段结束后，ContextStore 将原始工具消息压缩为阶段产物和证据表；
-7. 写任务经过 Plan、Execute 和 Evaluate，Evaluate 根据变更类型自动运行验证；
-8. 只读任务跳过写阶段，Finalize 阶段不再提供工具，只生成最终总结；
-9. 循环执行，直到 Finalize 完成或达到最大步数。
+7. 写任务在 Plan 阶段生成结构化 `ExecutionPlan`，程序校验步骤数量、目标文件、写入范围和验收标准覆盖；
+8. `WorkItemTracker` 将计划步骤标记为 pending、completed 或 incomplete，并把未完成步骤反馈给 Execute；
+9. Evaluate 根据变更类型自动运行验证，并用 EvidenceTable 同时核对工作项和验收标准；
+10. CompletionGate 根据变更、diff、验证、工作项和证据决定进入 Finalize，或回退到 Understand、Evaluate、Execute；
+11. 只读任务跳过写阶段，但仍经过 Evaluate 和 CompletionGate；
+12. 循环执行，直到 Finalize 完成或达到最大步数。
 
 ## 安全说明
 

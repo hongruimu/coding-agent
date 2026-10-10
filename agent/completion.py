@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.context_store import EvidenceItem
+from agent.execution_plan import ExecutionPlan, WorkItemReport
 from agent.task_spec import TaskSpec, TaskType
 from agent.validation import ValidationPlan, ValidationResult
 
@@ -19,6 +20,8 @@ class CompletionReport:
     failed_checks: tuple[str, ...]
     satisfied_criteria: tuple[str, ...]
     missing_evidence: tuple[str, ...]
+    completed_work_items: tuple[str, ...]
+    incomplete_work_items: tuple[str, ...]
     retry_phase: str | None
     attempt: int
     retry_allowed: bool
@@ -29,6 +32,8 @@ class CompletionReport:
             "failed_checks": list(self.failed_checks),
             "satisfied_criteria": list(self.satisfied_criteria),
             "missing_evidence": list(self.missing_evidence),
+            "completed_work_items": list(self.completed_work_items),
+            "incomplete_work_items": list(self.incomplete_work_items),
             "retry_phase": self.retry_phase,
             "attempt": self.attempt,
             "retry_allowed": self.retry_allowed,
@@ -46,6 +51,8 @@ def evaluate_completion(
     evaluation_output: str,
     attempt: int,
     max_retries: int,
+    execution_plan: ExecutionPlan | None = None,
+    work_item_report: WorkItemReport | None = None,
 ) -> CompletionReport:
     failed_checks: list[str] = []
     missing_evidence: list[str] = []
@@ -118,6 +125,35 @@ def evaluate_completion(
         missing_evidence.append("repository understanding evidence")
         understanding_failed = True
 
+    completed_work_items: tuple[str, ...] = ()
+    incomplete_work_items: tuple[str, ...] = ()
+    if execution_plan is not None:
+        expected_work_items = tuple(step.id for step in execution_plan.steps)
+        if work_item_report is None:
+            failed_checks.append("The evaluation output is missing work item completion status.")
+            incomplete_work_items = expected_work_items
+            evaluation_failed = True
+        else:
+            completed_work_items = work_item_report.completed_ids
+            incomplete_work_items = tuple(
+                step_id for step_id in expected_work_items if step_id not in set(completed_work_items)
+            )
+            if work_item_report.errors:
+                failed_checks.extend(work_item_report.errors)
+                missing_evidence.extend(work_item_report.pending_ids)
+                evaluation_failed = True
+            if work_item_report.incomplete_ids:
+                failed_checks.append(
+                    "Execution plan work items are incomplete: " + ", ".join(work_item_report.incomplete_ids)
+                )
+                implementation_failed = True
+            elif incomplete_work_items and not work_item_report.errors:
+                failed_checks.append(
+                    "Execution plan work items lack completion evidence: " + ", ".join(incomplete_work_items)
+                )
+                missing_evidence.extend(incomplete_work_items)
+                evaluation_failed = True
+
     criteria, parse_error = _parse_completion_criteria(evaluation_output)
     satisfied_criteria: list[str] = []
     known_sources = {item.source.strip().casefold() for item in successful_evidence if item.source.strip()}
@@ -180,6 +216,8 @@ def evaluate_completion(
         failed_checks=tuple(dict.fromkeys(failed_checks)),
         satisfied_criteria=tuple(dict.fromkeys(satisfied_criteria)),
         missing_evidence=tuple(dict.fromkeys(missing_evidence)),
+        completed_work_items=completed_work_items,
+        incomplete_work_items=incomplete_work_items,
         retry_phase=retry_phase,
         attempt=attempt,
         retry_allowed=retry_allowed,

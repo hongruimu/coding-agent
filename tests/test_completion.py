@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agent.completion import evaluate_completion
 from agent.context_store import EvidenceItem
+from agent.execution_plan import WorkItemTracker, parse_execution_plan
 from agent.task_spec import TaskSpec, TaskType
 from agent.validation import ValidationCommand, ValidationPlan, ValidationResult
 
@@ -127,6 +128,56 @@ class CompletionGateTests(unittest.TestCase):
             self.assertEqual("execute", report.retry_phase)
             self.assertTrue(any("README" in check for check in report.failed_checks))
 
+    def test_incomplete_work_item_retries_execute(self):
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            spec = self._spec(Path(workspace_dir), write_allowed=True, target_files=("app.py",))
+            plan = parse_execution_plan(_plan(spec), spec).plan
+            tracker = WorkItemTracker(plan)
+            evidence = (EvidenceItem("execute", "diff", "app.py", "diff", "success"),)
+            output = _checklist(spec, "app.py", work_item_satisfied=False)
+            work_item_report = tracker.update(output, evidence)
+
+            report = evaluate_completion(
+                task_spec=spec,
+                changed_files=("app.py",),
+                validation_plan=None,
+                validation_results=(),
+                evidence=evidence,
+                evaluation_output=output,
+                attempt=1,
+                max_retries=2,
+                execution_plan=plan,
+                work_item_report=work_item_report,
+            )
+
+            self.assertEqual("execute", report.retry_phase)
+            self.assertEqual(("step-1",), report.incomplete_work_items)
+
+    def test_invalid_work_item_evidence_retries_evaluate(self):
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            spec = self._spec(Path(workspace_dir), write_allowed=True, target_files=("app.py",))
+            plan = parse_execution_plan(_plan(spec), spec).plan
+            tracker = WorkItemTracker(plan)
+            evidence = (EvidenceItem("execute", "diff", "app.py", "diff", "success"),)
+            output = _checklist(spec, "app.py", work_item_source="missing.py")
+            work_item_report = tracker.update(output, evidence)
+
+            report = evaluate_completion(
+                task_spec=spec,
+                changed_files=("app.py",),
+                validation_plan=None,
+                validation_results=(),
+                evidence=evidence,
+                evaluation_output=output,
+                attempt=1,
+                max_retries=2,
+                execution_plan=plan,
+                work_item_report=work_item_report,
+            )
+
+            self.assertEqual("evaluate", report.retry_phase)
+            self.assertEqual(("step-1",), report.incomplete_work_items)
+
     def _evaluate(
         self,
         spec: TaskSpec,
@@ -172,12 +223,38 @@ class CompletionGateTests(unittest.TestCase):
         )
 
 
-def _checklist(spec: TaskSpec, source: str) -> str:
+def _checklist(
+    spec: TaskSpec,
+    source: str,
+    *,
+    work_item_satisfied: bool = True,
+    work_item_source: str | None = None,
+) -> str:
     criteria = [
         {"index": index, "satisfied": True, "evidence": [source]}
         for index, _ in enumerate(spec.acceptance_criteria)
     ]
-    return "[COMPLETION]\n" + json.dumps({"criteria": criteria})
+    payload = {"criteria": criteria}
+    if work_item_source is not None or not work_item_satisfied:
+        payload["work_items"] = [
+            {
+                "id": "step-1",
+                "satisfied": work_item_satisfied,
+                "evidence": [work_item_source or source] if work_item_satisfied else [],
+            }
+        ]
+    return "[COMPLETION]\n" + json.dumps(payload)
+
+
+def _plan(spec: TaskSpec) -> str:
+    step = {
+        "id": "step-1",
+        "objective": "Implement the requested behavior.",
+        "target_files": list(spec.target_files),
+        "acceptance_criteria": list(range(len(spec.acceptance_criteria))),
+        "validation_hint": "Run validation.",
+    }
+    return "[PLAN]\n" + json.dumps({"steps": [step]})
 
 
 def _validation(*, passed: bool) -> tuple[ValidationPlan, tuple[ValidationResult, ...]]:

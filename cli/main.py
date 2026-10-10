@@ -71,6 +71,9 @@ def main() -> int:
         print(f"\n[validation={validation_status}]")
     if result.evidence:
         print(f"\n[evidence_items={len(result.evidence)}]")
+    if result.work_items:
+        completed = sum(item.status.value == "completed" for item in result.work_items)
+        print(f"\n[work_items={completed}/{len(result.work_items)}]")
     if result.completion_report is not None:
         completion_status = "ready" if result.completion_report.ready else "incomplete"
         print(f"\n[completion={completion_status}]")

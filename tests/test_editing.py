@@ -37,6 +37,8 @@ class EditingClient:
         else:
             if phase == "evaluate":
                 content = _completion_output(messages, "app.py")
+            elif phase == "plan":
+                content = _plan_output(messages)
             else:
                 content = "updated" if not tools else "phase complete"
             message = SimpleNamespace(content=content, tool_calls=None)
@@ -160,6 +162,15 @@ def _current_phase(messages: list[dict]) -> str:
 
 
 def _completion_output(messages: list[dict], source: str) -> str:
+    work_items = []
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "system" and isinstance(content, str) and content.startswith("Execution plan:"):
+            plan, _ = json.JSONDecoder().raw_decode(content.removeprefix("Execution plan:\n"))
+            work_items = [
+                {"id": step["id"], "satisfied": True, "evidence": [source]}
+                for step in plan["steps"]
+            ]
     for message in messages:
         content = message.get("content")
         if message.get("role") == "system" and isinstance(content, str) and content.startswith("Task specification:"):
@@ -168,7 +179,23 @@ def _completion_output(messages: list[dict], source: str) -> str:
                 {"index": index, "satisfied": True, "evidence": [source]}
                 for index, _ in enumerate(task_spec["acceptance_criteria"])
             ]
-            return "[COMPLETION]\n" + json.dumps({"criteria": criteria})
+            return "[COMPLETION]\n" + json.dumps({"work_items": work_items, "criteria": criteria})
+    raise AssertionError("Task specification message was not found")
+
+
+def _plan_output(messages: list[dict]) -> str:
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "system" and isinstance(content, str) and content.startswith("Task specification:"):
+            task_spec = json.loads(content.removeprefix("Task specification:\n"))
+            step = {
+                "id": "step-1",
+                "objective": "Modify the requested file.",
+                "target_files": task_spec["target_files"],
+                "acceptance_criteria": list(range(len(task_spec["acceptance_criteria"]))),
+                "validation_hint": "Run automatic validation.",
+            }
+            return "[PLAN]\n" + json.dumps({"steps": [step]})
     raise AssertionError("Task specification message was not found")
 
 
