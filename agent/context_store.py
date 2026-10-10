@@ -244,6 +244,10 @@ class ContextStore:
             )
         elif tool_name in {"write_file", "replace_text"} and isinstance(path, str):
             self._add_evidence(EvidenceItem(phase, "change", path, f"Changed with {tool_name}.{failure_detail}", status))
+            if success:
+                self._add_evidence(
+                    EvidenceItem(phase, "diff", path, "Automatic diff returned after edit.", "success")
+                )
         elif tool_name == "git_diff":
             self._add_evidence(
                 EvidenceItem(phase, "diff", str(path or "."), f"Git diff inspected.{failure_detail}", status)

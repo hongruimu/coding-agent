@@ -21,6 +21,7 @@ class EditingClient:
         self.diff_result = ""
 
     def create(self, *, model, messages, tools):
+        phase = _current_phase(messages)
         tool_names = {tool["function"]["name"] for tool in tools}
         if messages[-1]["role"] == "tool":
             self.diff_result = messages[-1]["content"]
@@ -34,7 +35,10 @@ class EditingClient:
             tool_call = SimpleNamespace(id="call-1", type="function", function=function)
             message = SimpleNamespace(content=None, tool_calls=[tool_call])
         else:
-            content = "updated" if not tools else "phase complete"
+            if phase == "evaluate":
+                content = _completion_output(messages, "app.py")
+            else:
+                content = "updated" if not tools else "phase complete"
             message = SimpleNamespace(content=content, tool_calls=None)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
@@ -146,6 +150,26 @@ class EditingTests(unittest.TestCase):
         if shutil.which("git") is None:
             self.skipTest("git is not available")
         subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+
+
+def _current_phase(messages: list[dict]) -> str:
+    for message in reversed(messages):
+        if message["role"] == "system" and message["content"].startswith("Current phase:"):
+            return message["content"].splitlines()[0].split(":", maxsplit=1)[1].strip()
+    raise AssertionError("Current phase message was not found")
+
+
+def _completion_output(messages: list[dict], source: str) -> str:
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "system" and isinstance(content, str) and content.startswith("Task specification:"):
+            task_spec = json.loads(content.removeprefix("Task specification:\n"))
+            criteria = [
+                {"index": index, "satisfied": True, "evidence": [source]}
+                for index, _ in enumerate(task_spec["acceptance_criteria"])
+            ]
+            return "[COMPLETION]\n" + json.dumps({"criteria": criteria})
+    raise AssertionError("Task specification message was not found")
 
 
 if __name__ == "__main__":

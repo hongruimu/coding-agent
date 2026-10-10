@@ -31,6 +31,8 @@ class CompactionClient:
         elif phase == AgentPhase.UNDERSTAND.value:
             self.saw_raw_result = RAW_MARKER in messages[-1]["content"]
             message = SimpleNamespace(content="The requested file was inspected.", tool_calls=None)
+        elif phase == AgentPhase.EVALUATE.value:
+            message = SimpleNamespace(content=_completion_output(messages, "app.py"), tool_calls=None)
         else:
             self.final_messages = messages
             message = SimpleNamespace(content="final answer", tool_calls=None)
@@ -127,7 +129,7 @@ class ContextStoreTests(unittest.TestCase):
             self.assertIn("The requested file was inspected", final_context)
             self.assertEqual(RAW_MARKER, store.observations[0].raw_result.splitlines()[3])
             self.assertTrue(any(item.source == "app.py" for item in result.evidence))
-            self.assertEqual(["understand", "finalize"], [item.phase for item in result.phase_artifacts])
+            self.assertEqual(["understand", "evaluate", "finalize"], [item.phase for item in result.phase_artifacts])
 
 
 def _current_phase(messages: list[dict]) -> str:
@@ -135,6 +137,19 @@ def _current_phase(messages: list[dict]) -> str:
         if message["role"] == "system" and message["content"].startswith("Current phase:"):
             return message["content"].splitlines()[0].split(":", maxsplit=1)[1].strip()
     raise AssertionError("Current phase message was not found")
+
+
+def _completion_output(messages: list[dict], source: str) -> str:
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "system" and isinstance(content, str) and content.startswith("Task specification:"):
+            task_spec = json.loads(content.removeprefix("Task specification:\n"))
+            criteria = [
+                {"index": index, "satisfied": True, "evidence": [source]}
+                for index, _ in enumerate(task_spec["acceptance_criteria"])
+            ]
+            return "[COMPLETION]\n" + json.dumps({"criteria": criteria})
+    raise AssertionError("Task specification message was not found")
 
 
 if __name__ == "__main__":

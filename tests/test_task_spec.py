@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,10 +15,20 @@ from tools.repo import build_repo_map
 class RecordingClient:
     def __init__(self):
         self.messages = []
+        self.inspected = False
 
     def create(self, *, model, messages, tools):
         self.messages = messages
-        message = SimpleNamespace(content="done", tool_calls=None)
+        phase = _current_phase(messages)
+        if phase == "understand" and not self.inspected:
+            self.inspected = True
+            function = SimpleNamespace(name="repo_map", arguments="{}")
+            tool_call = SimpleNamespace(id="repo-1", type="function", function=function)
+            message = SimpleNamespace(content=None, tool_calls=[tool_call])
+        elif phase == "evaluate":
+            message = SimpleNamespace(content=_completion_output(messages, "."), tool_calls=None)
+        else:
+            message = SimpleNamespace(content="done", tool_calls=None)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
@@ -147,6 +158,26 @@ class TaskSpecTests(unittest.TestCase):
             self.assertTrue(any("Task specification:" in content for content in system_contents))
             self.assertTrue(any('"task_type": "explain_project"' in content for content in system_contents))
             self.assertTrue(any("Context plan:" in content for content in system_contents))
+
+
+def _current_phase(messages: list[dict]) -> str:
+    for message in reversed(messages):
+        if message["role"] == "system" and message["content"].startswith("Current phase:"):
+            return message["content"].splitlines()[0].split(":", maxsplit=1)[1].strip()
+    raise AssertionError("Current phase message was not found")
+
+
+def _completion_output(messages: list[dict], source: str) -> str:
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "system" and isinstance(content, str) and content.startswith("Task specification:"):
+            task_spec = json.loads(content.removeprefix("Task specification:\n"))
+            criteria = [
+                {"index": index, "satisfied": True, "evidence": [source]}
+                for index, _ in enumerate(task_spec["acceptance_criteria"])
+            ]
+            return "[COMPLETION]\n" + json.dumps({"criteria": criteria})
+    raise AssertionError("Task specification message was not found")
 
 
 if __name__ == "__main__":

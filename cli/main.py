@@ -71,6 +71,9 @@ def main() -> int:
         print(f"\n[validation={validation_status}]")
     if result.evidence:
         print(f"\n[evidence_items={len(result.evidence)}]")
+    if result.completion_report is not None:
+        completion_status = "ready" if result.completion_report.ready else "incomplete"
+        print(f"\n[completion={completion_status}]")
     print(f"\n[phase={result.phase.value}]")
     print(f"\n[steps_used={result.steps_used}]")
     return 0

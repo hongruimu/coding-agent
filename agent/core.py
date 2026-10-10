@@ -4,10 +4,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
 
+from agent.completion import CompletionReport, evaluate_completion
 from agent.context_plan import ContextPlan
 from agent.context_store import ContextStore, EvidenceItem, PhaseArtifact
 from agent.task_spec import TaskSpec
-from agent.validation import ValidationResult, build_validation_plan, execute_validation_plan
+from agent.validation import ValidationPlan, ValidationResult, build_validation_plan, execute_validation_plan
 from tools.repo import RepoMap, build_repo_map
 from tools.registry import ToolRegistry
 
@@ -53,6 +54,7 @@ class AgentResult:
     validation_results: tuple[ValidationResult, ...] = ()
     phase_artifacts: tuple[PhaseArtifact, ...] = ()
     evidence: tuple[EvidenceItem, ...] = ()
+    completion_report: CompletionReport | None = None
     phase: AgentPhase = AgentPhase.FINALIZE
 
 
@@ -73,6 +75,7 @@ class CodingAgent:
         max_steps: int = 12,
         repo_map: RepoMap | None = None,
         context_store: ContextStore | None = None,
+        max_completion_retries: int = 2,
     ):
         self.client = client
         self.registry = registry
@@ -83,14 +86,21 @@ class CodingAgent:
         self.repo_map = repo_map or build_repo_map(workspace=self.workspace)
         self.context_store = context_store or ContextStore()
         self.max_steps = max_steps
+        self.max_completion_retries = max_completion_retries
         self._read_files: set[str] = set()
         self._changed_files: list[str] = []
         self._validation_results: list[ValidationResult] = []
+        self._validation_plan: ValidationPlan | None = None
+        self._completion_report: CompletionReport | None = None
+        self._completion_attempt = 0
 
     def run(self, user_prompt: str) -> AgentResult:
         self._read_files.clear()
         self._changed_files.clear()
         self._validation_results.clear()
+        self._validation_plan = None
+        self._completion_report = None
+        self._completion_attempt = 0
         self.context_store.reset()
         phase = AgentPhase.UNDERSTAND
         base_messages: list[dict[str, Any]] = [
@@ -166,6 +176,7 @@ class CodingAgent:
                     validation_results=tuple(self._validation_results),
                     phase_artifacts=tuple(self.context_store.phase_artifacts),
                     evidence=tuple(self.context_store.evidence),
+                    completion_report=self._completion_report,
                     phase=phase,
                 )
 
@@ -175,7 +186,23 @@ class CodingAgent:
                 changed_files=tuple(self._changed_files),
                 validation_results=tuple(self._validation_results) if phase is AgentPhase.EVALUATE else (),
             )
-            phase = self._next_phase(phase, message.content or "")
+            completion_message = None
+            if phase is AgentPhase.EVALUATE:
+                self._completion_attempt += 1
+                self._completion_report = evaluate_completion(
+                    task_spec=self.task_spec,
+                    changed_files=tuple(self._changed_files),
+                    validation_plan=self._validation_plan,
+                    validation_results=tuple(self._validation_results),
+                    evidence=tuple(self.context_store.evidence),
+                    evaluation_output=message.content or "",
+                    attempt=self._completion_attempt,
+                    max_retries=self.max_completion_retries,
+                )
+                completion_message = {"role": "system", "content": self._completion_report.format_for_prompt()}
+                phase = self._phase_after_completion(self._completion_report)
+            else:
+                phase = self._next_phase(phase)
             validation_message = None
             if phase is AgentPhase.EVALUATE:
                 validation_message = self._automatic_validation_message()
@@ -185,6 +212,8 @@ class CodingAgent:
             ]
             if validation_message is not None:
                 messages.append(validation_message)
+            if completion_message is not None:
+                messages.append(completion_message)
             messages.append(self._phase_message(phase))
 
         changed = ", ".join(self._changed_files) if self._changed_files else "none"
@@ -200,6 +229,7 @@ class CodingAgent:
             validation_results=tuple(self._validation_results),
             phase_artifacts=tuple(self.context_store.phase_artifacts),
             evidence=tuple(self.context_store.evidence),
+            completion_report=self._completion_report,
             phase=phase,
         )
 
@@ -208,6 +238,7 @@ class CodingAgent:
 
     def _automatic_validation_message(self) -> dict[str, str]:
         plan = build_validation_plan(self.repo_map, tuple(self._changed_files))
+        self._validation_plan = plan
         results = execute_validation_plan(plan, self.workspace)
         self._validation_results[:] = results
         self.context_store.record_validation(AgentPhase.EVALUATE.value, results)
@@ -237,7 +268,9 @@ class CodingAgent:
             AgentPhase.EVALUATE: (
                 "Review the automatic validation results, changed files, and diffs. Use read_file or git_diff for "
                 "additional evidence, but do not modify files. If a fix is still required, start the phase summary "
-                "with [NEEDS_CHANGES] so the program can return to Execute."
+                "with [NEEDS_CHANGES]. Always end with a [COMPLETION] JSON object containing a criteria list. "
+                "Include every acceptance criterion index exactly once with satisfied=true or false and an evidence "
+                "list containing exact source values from the EvidenceTable."
             ),
             AgentPhase.FINALIZE: (
                 "Produce the final answer without calling tools. Summarize the result, changed files, validation, "
@@ -269,22 +302,23 @@ class CodingAgent:
             return "not run"
         return "passed" if all(result.passed for result in self._validation_results) else "failed"
 
-    def _next_phase(self, phase: AgentPhase, phase_output: str = "") -> AgentPhase:
+    def _next_phase(self, phase: AgentPhase) -> AgentPhase:
         if phase is AgentPhase.UNDERSTAND:
             if self.task_spec.plan_required:
                 return AgentPhase.PLAN
             if self.task_spec.write_allowed:
                 return AgentPhase.EXECUTE
-            return AgentPhase.FINALIZE
+            return AgentPhase.EVALUATE
         if phase is AgentPhase.PLAN:
-            return AgentPhase.EXECUTE if self.task_spec.write_allowed else AgentPhase.FINALIZE
+            return AgentPhase.EXECUTE if self.task_spec.write_allowed else AgentPhase.EVALUATE
         if phase is AgentPhase.EXECUTE:
             return AgentPhase.EVALUATE
-        if phase is AgentPhase.EVALUATE:
-            if phase_output.lstrip().casefold().startswith("[needs_changes]"):
-                return AgentPhase.EXECUTE
-            return AgentPhase.FINALIZE
         return AgentPhase.FINALIZE
+
+    def _phase_after_completion(self, report: CompletionReport) -> AgentPhase:
+        if report.ready or not report.retry_allowed or report.retry_phase is None:
+            return AgentPhase.FINALIZE
+        return AgentPhase(report.retry_phase)
 
     def _assistant_message(self, message: Any) -> dict[str, Any]:
         assistant_message: dict[str, Any] = {

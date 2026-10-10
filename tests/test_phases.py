@@ -14,9 +14,11 @@ from tools.repo import build_repo_map
 
 
 class PhaseClient:
-    def __init__(self, edit: bool = False, rework_once: bool = False):
+    def __init__(self, edit: bool = False, rework_once: bool = False, read_only: bool = False):
         self.edit = edit
         self.rework_once = rework_once
+        self.read_only = read_only
+        self.inspected = False
         self.edit_count = 0
         self.evaluation_count = 0
         self.records: list[tuple[str, set[str]]] = []
@@ -25,6 +27,13 @@ class PhaseClient:
         phase = _current_phase(messages)
         tool_names = {tool["function"]["name"] for tool in tools}
         self.records.append((phase, tool_names))
+
+        if phase == AgentPhase.UNDERSTAND.value and self.read_only and not self.inspected:
+            self.inspected = True
+            function = SimpleNamespace(name="read_file", arguments=json.dumps({"path": "app.py"}))
+            tool_call = SimpleNamespace(id="inspect-1", type="function", function=function)
+            message = SimpleNamespace(content=None, tool_calls=[tool_call])
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
         should_edit = phase == AgentPhase.EXECUTE.value and self.edit and (
             self.edit_count == 0 or (self.rework_once and self.evaluation_count == 1 and self.edit_count == 1)
@@ -51,7 +60,10 @@ class PhaseClient:
         else:
             if phase == AgentPhase.EVALUATE.value:
                 self.evaluation_count += 1
-            message = SimpleNamespace(content=f"{phase} complete", tool_calls=None)
+                content = _completion_output(messages, "app.py")
+            else:
+                content = f"{phase} complete"
+            message = SimpleNamespace(content=content, tool_calls=None)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
@@ -95,6 +107,9 @@ class PhaseTests(unittest.TestCase):
             self.assertTrue(result.validation_results)
             self.assertTrue(all(item.passed for item in result.validation_results))
             self.assertTrue(any(item.kind == "validation" for item in result.evidence))
+            self.assertTrue(any(item.kind == "diff" and item.source == "app.py" for item in result.evidence))
+            self.assertIsNotNone(result.completion_report)
+            self.assertTrue(result.completion_report.ready)
             self.assertEqual(AgentPhase.FINALIZE, result.phase)
 
     def test_read_only_task_skips_write_phases(self):
@@ -105,8 +120,13 @@ class PhaseTests(unittest.TestCase):
 
             result = agent.run("解释 app.py")
 
-            self.assertEqual(["understand", "finalize"], [phase for phase, _ in client.records])
+            self.assertEqual(
+                ["understand", "understand", "evaluate", "finalize"],
+                [phase for phase, _ in client.records],
+            )
             self.assertTrue(all("replace_text" not in tools for _, tools in client.records))
+            self.assertIsNotNone(result.completion_report)
+            self.assertTrue(result.completion_report.ready)
             self.assertEqual(AgentPhase.FINALIZE, result.phase)
 
     def test_evaluate_can_return_to_execute_for_rework(self):
@@ -181,7 +201,7 @@ class PhaseTests(unittest.TestCase):
         repository = build_repo_map(workspace=workspace)
         task_spec = build_task_spec(prompt, workspace, repository)
         context_plan = build_context_plan(task_spec, repository)
-        client = PhaseClient(edit=edit)
+        client = PhaseClient(edit=edit, read_only=not task_spec.write_allowed)
         agent = CodingAgent(
             client=client,
             registry=create_registry(
@@ -207,6 +227,19 @@ def _current_phase(messages: list[dict]) -> str:
         if message["role"] == "system" and message["content"].startswith("Current phase:"):
             return message["content"].splitlines()[0].split(":", maxsplit=1)[1].strip()
     raise AssertionError("Current phase message was not found")
+
+
+def _completion_output(messages: list[dict], source: str) -> str:
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "system" and isinstance(content, str) and content.startswith("Task specification:"):
+            task_spec = json.loads(content.removeprefix("Task specification:\n"))
+            criteria = [
+                {"index": index, "satisfied": True, "evidence": [source]}
+                for index, _ in enumerate(task_spec["acceptance_criteria"])
+            ]
+            return "Evaluation complete.\n[COMPLETION]\n" + json.dumps({"criteria": criteria})
+    raise AssertionError("Task specification message was not found")
 
 
 if __name__ == "__main__":
