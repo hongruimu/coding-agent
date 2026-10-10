@@ -13,6 +13,7 @@ from agent.execution_plan import (
     WorkItemTracker,
     parse_execution_plan,
 )
+from agent.project_instructions import ProjectInstructions, build_project_instructions
 from agent.task_spec import TaskSpec
 from agent.validation import ValidationPlan, ValidationResult, build_validation_plan, execute_validation_plan
 from tools.repo import RepoMap, build_repo_map
@@ -85,6 +86,7 @@ class CodingAgent:
         context_store: ContextStore | None = None,
         max_completion_retries: int = 2,
         max_plan_retries: int = 2,
+        project_instructions: ProjectInstructions | None = None,
     ):
         self.client = client
         self.registry = registry
@@ -93,6 +95,9 @@ class CodingAgent:
         self.task_spec = task_spec
         self.context_plan = context_plan
         self.repo_map = repo_map or build_repo_map(workspace=self.workspace)
+        self.project_instructions = project_instructions or build_project_instructions(
+            self.workspace, self.repo_map.files
+        )
         self.context_store = context_store or ContextStore()
         self.max_steps = max_steps
         self.max_completion_retries = max_completion_retries
@@ -140,7 +145,11 @@ class CodingAgent:
             },
             {"role": "user", "content": user_prompt},
         ]
-        messages = [*base_messages, self._phase_message(phase)]
+        messages = [*base_messages]
+        instruction_message = self._project_instruction_message(phase)
+        if instruction_message is not None:
+            messages.append(instruction_message)
+        messages.append(self._phase_message(phase))
 
         latest_content = ""
         for step in range(1, self.max_steps + 1):
@@ -248,6 +257,9 @@ class CodingAgent:
                 *base_messages,
                 {"role": "system", "content": self.context_store.format_for_prompt()},
             ]
+            instruction_message = self._project_instruction_message(phase)
+            if instruction_message is not None:
+                messages.append(instruction_message)
             if self._work_item_tracker is not None:
                 messages.append({"role": "system", "content": self._work_item_tracker.format_for_prompt()})
             if validation_message is not None:
@@ -369,6 +381,25 @@ class CodingAgent:
         if self._work_item_tracker is None:
             return ()
         return self._work_item_tracker.report.states
+
+    def _project_instruction_message(self, phase: AgentPhase) -> dict[str, str] | None:
+        if phase is AgentPhase.FINALIZE:
+            return None
+        bundle = self.project_instructions.resolve_for_paths(self._instruction_paths())
+        if not bundle.documents:
+            return None
+        for document in bundle.documents:
+            self.context_store.record_instruction(phase.value, document.source, document.scope)
+        return {"role": "system", "content": bundle.format_for_prompt()}
+
+    def _instruction_paths(self) -> tuple[str, ...]:
+        paths = [*self.task_spec.target_files, *self._read_files, *self._changed_files]
+        if self._execution_plan is not None:
+            for step in self._execution_plan.steps:
+                paths.extend(step.target_files)
+        elif not self.task_spec.target_files:
+            paths.extend(self.context_plan.must_read)
+        return tuple(dict.fromkeys(path for path in paths if path))
 
     def _assistant_message(self, message: Any) -> dict[str, Any]:
         assistant_message: dict[str, Any] = {

@@ -10,6 +10,12 @@ from agent.execution_plan import (
     WorkItemTracker,
     parse_execution_plan,
 )
+from agent.project_instructions import (
+    InstructionBundle,
+    InstructionDocument,
+    ProjectInstructions,
+    build_project_instructions,
+)
 from agent.task_spec import TaskSpec, TaskType, build_task_spec
 from agent.validation import ValidationCommand, ValidationPlan, ValidationResult, build_validation_plan
 from agent.completion import CompletionReport, evaluate_completion
@@ -25,9 +31,12 @@ __all__ = [
     "ContextStore",
     "EvidenceItem",
     "ExecutionPlan",
+    "InstructionBundle",
+    "InstructionDocument",
     "PhaseArtifact",
     "PlanParseResult",
     "PlanStep",
+    "ProjectInstructions",
     "TaskSpec",
     "TaskType",
     "ToolObservation",
@@ -39,6 +48,7 @@ __all__ = [
     "WorkItemStatus",
     "WorkItemTracker",
     "build_context_plan",
+    "build_project_instructions",
     "build_task_spec",
     "build_validation_plan",
     "evaluate_completion",

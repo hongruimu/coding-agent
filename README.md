@@ -126,15 +126,16 @@ Options:
 1. CLI 解析用户输入、工作目录和模型配置；
 2. 构建结构化项目地图，并根据用户任务生成 `TaskSpec`；
 3. 根据任务类型和项目结构生成 `ContextPlan`，确定读取顺序和预算；
-4. 按 `TaskSpec` 的读写和 Shell 权限注册可用工具；
-5. Agent 进入 Understand 阶段，并按当前阶段动态裁剪工具；
-6. 每个阶段结束后，ContextStore 将原始工具消息压缩为阶段产物和证据表；
-7. 写任务在 Plan 阶段生成结构化 `ExecutionPlan`，程序校验步骤数量、目标文件、写入范围和验收标准覆盖；
-8. `WorkItemTracker` 将计划步骤标记为 pending、completed 或 incomplete，并把未完成步骤反馈给 Execute；
-9. Evaluate 根据变更类型自动运行验证，并用 EvidenceTable 同时核对工作项和验收标准；
-10. CompletionGate 根据变更、diff、验证、工作项和证据决定进入 Finalize，或回退到 Understand、Evaluate、Execute；
-11. 只读任务跳过写阶段，但仍经过 Evaluate 和 CompletionGate；
-12. 循环执行，直到 Finalize 完成或达到最大步数。
+4. 加载适用于目标路径的 `AGENTS.md`、`CLAUDE.md` 和 `PROJECT.md`，子目录规则优先于根目录规则；
+5. 按 `TaskSpec` 的读写和 Shell 权限注册可用工具；
+6. Agent 进入 Understand 阶段，并按当前阶段动态裁剪工具；
+7. 每个阶段结束后，ContextStore 将原始工具消息压缩为阶段产物和证据表；
+8. 写任务在 Plan 阶段生成结构化 `ExecutionPlan`，程序校验步骤数量、目标文件、写入范围和验收标准覆盖；
+9. `WorkItemTracker` 将计划步骤标记为 pending、completed 或 incomplete，并把未完成步骤反馈给 Execute；
+10. Evaluate 根据变更类型自动运行验证，并用 EvidenceTable 同时核对工作项和验收标准；
+11. CompletionGate 根据变更、diff、验证、工作项和证据决定进入 Finalize，或回退到 Understand、Evaluate、Execute；
+12. 只读任务跳过写阶段，但仍经过 Evaluate 和 CompletionGate；
+13. 循环执行，直到 Finalize 完成或达到最大步数。
 
 ## 安全说明
 

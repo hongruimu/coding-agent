@@ -113,6 +113,17 @@ class ContextStore:
                 )
             )
 
+    def record_instruction(self, phase: str, source: str, scope: str) -> None:
+        self._add_evidence(
+            EvidenceItem(
+                phase=phase,
+                kind="instruction",
+                source=source,
+                detail=f"Project instruction loaded for scope {scope}.",
+                status="observed",
+            )
+        )
+
     def complete_phase(
         self,
         *,
